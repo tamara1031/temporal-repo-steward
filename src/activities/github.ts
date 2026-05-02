@@ -1,5 +1,11 @@
 import { ApplicationFailure, Context, log } from '@temporalio/activity';
 import { execCommand, execOrThrow } from './exec';
+import {
+  decideCIStatus,
+  parseStatusCheckRollupJSON,
+  type CompletedCIDecision,
+} from './github-ci';
+import { invalidGhOutput, isRecord, parseGhJSON } from './github-json';
 
 function ghEnv(): NodeJS.ProcessEnv {
   const token = process.env.GITHUB_TOKEN;
@@ -30,6 +36,25 @@ export interface PRInfo {
   repoFullName: string;
 }
 
+export interface PRViewJSON {
+  number: number;
+  url: string;
+}
+
+export function parsePRViewJSON(stdout: string): PRViewJSON {
+  const data = parseGhJSON(stdout, 'gh pr view --json number,url');
+  if (!isRecord(data)) {
+    throw invalidGhOutput('gh pr view --json number,url output must be a JSON object');
+  }
+  if (typeof data.number !== 'number') {
+    throw invalidGhOutput('gh pr view --json number,url output is missing numeric field "number"');
+  }
+  if (typeof data.url !== 'string') {
+    throw invalidGhOutput('gh pr view --json number,url output is missing string field "url"');
+  }
+  return { number: data.number, url: data.url };
+}
+
 export async function createPRActivity(input: CreatePRInput): Promise<PRInfo> {
   const env = ghEnv();
   const args = [
@@ -53,7 +78,7 @@ export async function createPRActivity(input: CreatePRInput): Promise<PRInfo> {
     ['pr', 'view', input.branch, '--repo', input.repoFullName, '--json', 'number,url'],
     { cwd: input.workdir, env },
   );
-  const parsed = JSON.parse(view.stdout) as { number: number; url: string };
+  const parsed = parsePRViewJSON(view.stdout);
   return {
     number: parsed.number,
     url: parsed.url,
@@ -74,45 +99,6 @@ export interface CIResult {
   status: 'success' | 'failure' | 'timeout';
   failedRunIds: string[];
   failedJobNames: string[];
-}
-
-interface RollupCheck {
-  name: string;
-  state?: string;       // CheckRun: COMPLETED|IN_PROGRESS|QUEUED|PENDING|REQUESTED. StatusContext: PENDING|SUCCESS|ERROR|FAILURE|EXPECTED.
-  conclusion?: string;  // CheckRun: SUCCESS|FAILURE|NEUTRAL|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STALE|SKIPPED|STARTUP_FAILURE.
-  workflowName?: string;
-  detailsUrl?: string;
-}
-
-interface PRChecksJSON {
-  statusCheckRollup: RollupCheck[];
-}
-
-const TERMINAL_STATUS_STATES = new Set(['SUCCESS', 'FAILURE', 'ERROR']);
-const PASSING_OUTCOMES = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED', 'STALE']);
-
-interface CheckOutcome {
-  done: boolean;
-  passed: boolean;
-}
-
-function classifyCheck(c: RollupCheck): CheckOutcome {
-  // CheckRun objects expose `conclusion` once the run finishes.
-  if (c.conclusion) {
-    return { done: true, passed: PASSING_OUTCOMES.has(c.conclusion) };
-  }
-  // StatusContext objects only expose `state`. PENDING / EXPECTED means in flight.
-  if (c.state && TERMINAL_STATUS_STATES.has(c.state)) {
-    return { done: true, passed: c.state === 'SUCCESS' };
-  }
-  return { done: false, passed: false };
-}
-
-function extractRunId(detailsUrl?: string): string | undefined {
-  if (!detailsUrl) return undefined;
-  // Sample: https://github.com/owner/repo/actions/runs/1234567890/job/9876543210
-  const m = detailsUrl.match(/\/actions\/runs\/(\d+)/);
-  return m ? m[1] : undefined;
 }
 
 export async function waitForCIActivity(input: WaitForCIInput): Promise<CIResult> {
@@ -137,35 +123,29 @@ export async function waitForCIActivity(input: WaitForCIInput): Promise<CIResult
       ],
       { env },
     );
-    const data = JSON.parse(view.stdout) as PRChecksJSON;
-    const checks = data.statusCheckRollup ?? [];
+    const checks = parseStatusCheckRollupJSON(view.stdout);
+    const decision = decideCIStatus(checks);
 
-    if (checks.length === 0) {
+    if (decision.status === 'success' && checks.length === 0) {
       log.info('No CI checks configured for PR — treating as success', { pr: input.prNumber });
-      return { status: 'success', failedRunIds: [], failedJobNames: [] };
+      return toCIResult(decision);
     }
 
-    const outcomes = checks.map((c) => ({ check: c, outcome: classifyCheck(c) }));
-    const allDone = outcomes.every((o) => o.outcome.done);
-
-    if (allDone) {
-      const failed = outcomes.filter((o) => !o.outcome.passed).map((o) => o.check);
-      if (failed.length === 0) {
-        return { status: 'success', failedRunIds: [], failedJobNames: [] };
-      }
-      const failedRunIds = Array.from(
-        new Set(failed.map((c) => extractRunId(c.detailsUrl)).filter(Boolean) as string[]),
-      );
-      return {
-        status: 'failure',
-        failedRunIds,
-        failedJobNames: failed.map((c) => c.name),
-      };
+    if (decision.status !== 'pending') {
+      return toCIResult(decision);
     }
 
     await sleepCancellable(interval, ctx.cancellationSignal);
   }
   return { status: 'timeout', failedRunIds: [], failedJobNames: [] };
+}
+
+function toCIResult(decision: CompletedCIDecision): CIResult {
+  return {
+    status: decision.status,
+    failedRunIds: decision.failedRunIds,
+    failedJobNames: decision.failedJobNames,
+  };
 }
 
 function sleepCancellable(ms: number, signal: AbortSignal): Promise<void> {
