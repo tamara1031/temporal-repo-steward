@@ -1,0 +1,18 @@
+# Codex CLI config baked into the Worker image at /home/agent/.codex/config.toml.
+#
+# The Worker runs codex non-interactively via `codex exec` and orchestrates
+# subagents from `agents/` (mounted at /home/agent/.codex/agents/).
+#
+# Keep this file minimal — anything we set here is inherited by every
+# `codex exec` invocation in the worker, and we want to avoid surprising
+# coupling with future tuning of model defaults / approvals.
+
+[agents]
+# Concurrent agents per parent. We spawn 4 reviewers in parallel + planner /
+# implementer never overlap with reviewers, so 6 is enough headroom.
+max_threads = 6
+
+# Recursion depth. The orchestrator spawns subagents directly (depth = 1);
+# reviewers / implementer must not chain further. Default is already 1, but
+# we set it explicitly so a future Codex default change does not loosen it.
+max_depth = 1
