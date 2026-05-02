@@ -73,7 +73,10 @@ async function changedFilesIn(workdir: string): Promise<string[]> {
 export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
   await ensureCodexAuth();
 
-  const args = ['exec'];
+  // The Worker container is itself the security boundary, so we let codex run
+  // shell tools without bubblewrap (which otherwise fails with
+  // `bwrap: No permissions to create a new namespace` inside Docker).
+  const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
   if (input.model) args.push('--model', input.model);
 
   const parts = [input.systemPrompt?.trim(), input.context?.trim(), input.prompt.trim()]
@@ -92,6 +95,11 @@ export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
       HOME: process.env.HOME ?? os.homedir(),
       ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
       CODEX_NON_INTERACTIVE: '1',
+      // Defense-in-depth: the prompt forbids `git push` / `gh`, but with sandbox
+      // bypassed we also strip GitHub credentials from codex's child shell so a
+      // disobedient model cannot exfiltrate or push with them.
+      GITHUB_TOKEN: undefined,
+      GH_TOKEN: undefined,
     },
   });
 

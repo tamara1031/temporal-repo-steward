@@ -57,10 +57,14 @@ export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput>
     env,
   });
 
-  await execOrThrow('git', ['config', 'user.email', 'ai-agent@users.noreply.github.com'], {
-    cwd: workdir,
-  });
-  await execOrThrow('git', ['config', 'user.name', 'repo-steward-bot'], { cwd: workdir });
+  // Identity used by all auto-generated commits. Override with GIT_BOT_NAME /
+  // GIT_BOT_EMAIL on the Worker so the commits clearly attribute to a known
+  // bot account (e.g. your own GitHub no-reply address) instead of the
+  // default placeholder.
+  const botName = process.env.GIT_BOT_NAME ?? 'repo-steward-bot';
+  const botEmail = process.env.GIT_BOT_EMAIL ?? 'ai-agent@users.noreply.github.com';
+  await execOrThrow('git', ['config', 'user.email', botEmail], { cwd: workdir });
+  await execOrThrow('git', ['config', 'user.name', botName], { cwd: workdir });
 
   if (input.ref) {
     await execOrThrow('git', ['fetch', 'origin', input.ref], { cwd: workdir, env });
