@@ -1,5 +1,6 @@
 import { log, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
 import { cheap, heavy, ciWait } from './proxies';
+import { assertValidGitBranchName, assertValidRepoFullName } from '../validation';
 
 export interface RobustPRMergeInput {
   repoFullName: string;
@@ -31,6 +32,10 @@ export interface RobustPRMergeOutput {
 export async function robustPRMergeWorkflow(
   input: RobustPRMergeInput,
 ): Promise<RobustPRMergeOutput> {
+  assertValidRepoFullName(input.repoFullName);
+  assertValidGitBranchName(input.branch);
+  assertValidGitBranchName(input.baseBranch, 'baseBranch');
+
   const maxIters = input.maxFixIterations ?? 8;
   const autoMerge = input.autoMerge ?? true;
   const info = workflowInfo();

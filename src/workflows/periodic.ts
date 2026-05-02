@@ -8,6 +8,7 @@ import {
 import { cheap, heavy } from './proxies';
 import { robustPRMergeWorkflow } from './pr-lifecycle';
 import { buildRefactorPrompt } from './refactor-prompt';
+import { assertValidPeriodicRefactorTarget, makeAgentRefactorBranch } from '../validation';
 
 export interface PeriodicRefactorInput {
   repoFullName: string;
@@ -32,9 +33,10 @@ export interface PeriodicRefactorOutput {
 export async function periodicRefactorWorkflow(
   input: PeriodicRefactorInput,
 ): Promise<PeriodicRefactorOutput> {
+  assertValidPeriodicRefactorTarget(input);
   const baseBranch = input.baseBranch ?? 'main';
   const info = workflowInfo();
-  const branch = `agent/refactor/${info.workflowId}`;
+  const branch = makeAgentRefactorBranch(info.workflowId);
 
   const clone = await heavy.cloneRepoActivity({
     repoFullName: input.repoFullName,

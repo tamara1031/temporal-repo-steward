@@ -1,5 +1,10 @@
 import { ApplicationFailure, Context, log } from '@temporalio/activity';
 import { execCommand, execOrThrow } from './exec';
+import {
+  assertValidGitBranchName,
+  assertValidRepoFullName,
+  InvalidInputError,
+} from '../validation';
 
 function ghEnv(): NodeJS.ProcessEnv {
   const token = process.env.GITHUB_TOKEN;
@@ -10,6 +15,17 @@ function ghEnv(): NodeJS.ProcessEnv {
     );
   }
   return { GH_TOKEN: token, GITHUB_TOKEN: token };
+}
+
+function validateInput(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof InvalidInputError) {
+      throw ApplicationFailure.nonRetryable(err.message, 'InvalidInput');
+    }
+    throw err;
+  }
 }
 
 export interface CreatePRInput {
@@ -31,6 +47,12 @@ export interface PRInfo {
 }
 
 export async function createPRActivity(input: CreatePRInput): Promise<PRInfo> {
+  validateInput(() => {
+    assertValidRepoFullName(input.repoFullName);
+    assertValidGitBranchName(input.branch);
+    assertValidGitBranchName(input.baseBranch, 'baseBranch');
+  });
+
   const env = ghEnv();
   const args = [
     'pr',
@@ -116,6 +138,8 @@ function extractRunId(detailsUrl?: string): string | undefined {
 }
 
 export async function waitForCIActivity(input: WaitForCIInput): Promise<CIResult> {
+  validateInput(() => assertValidRepoFullName(input.repoFullName));
+
   const env = ghEnv();
   const interval = (input.pollIntervalSeconds ?? 30) * 1000;
   const deadline = Date.now() + (input.maxWaitSeconds ?? 60 * 60) * 1000;
@@ -190,6 +214,8 @@ export interface FetchFailedLogsInput {
 }
 
 export async function fetchFailedRunLogsActivity(input: FetchFailedLogsInput): Promise<string> {
+  validateInput(() => assertValidRepoFullName(input.repoFullName));
+
   const env = ghEnv();
   const max = input.maxBytes ?? 256 * 1024;
   const res = await execCommand(
@@ -209,6 +235,8 @@ export interface MergePRInput {
 }
 
 export async function mergePRActivity(input: MergePRInput): Promise<void> {
+  validateInput(() => assertValidRepoFullName(input.repoFullName));
+
   const env = ghEnv();
   const method = input.mergeMethod ?? 'squash';
   const args = [

@@ -7,6 +7,7 @@ import 'dotenv/config';
 import { Client, Connection, ScheduleOverlapPolicy } from '@temporalio/client';
 import { TASK_QUEUE } from './constants';
 import { periodicRefactorWorkflow } from './workflows';
+import { assertValidPeriodicRefactorTarget } from './validation';
 
 interface CLIArgs {
   command: string;
@@ -38,6 +39,11 @@ function parseArgs(argv: string[]): CLIArgs {
 
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv);
+  assertValidPeriodicRefactorTarget({
+    repoFullName: cli.repo,
+    baseBranch: cli.baseBranch,
+  });
+
   const connection = await Connection.connect({
     address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233',
   });

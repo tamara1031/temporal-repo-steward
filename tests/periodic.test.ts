@@ -83,4 +83,34 @@ describe('periodicRefactorWorkflow', () => {
     expect(names).toContain('mergePRActivity');
     expect(names).toContain('cleanupWorkspaceActivity');
   });
+
+  it('sanitizes workflow IDs before using them as git branches', async () => {
+    const { activities, calls } = makeMockActivities();
+
+    const taskQueue = 'periodic-test-branch-sanitize';
+    const worker = await Worker.create({
+      connection: env.nativeConnection,
+      taskQueue,
+      workflowBundle: await getWorkflowBundle(),
+      activities,
+    });
+
+    await worker.runUntil(
+      env.client.workflow.execute(periodicRefactorWorkflow, {
+        taskQueue,
+        workflowId: `periodic/test:${randomUUID()}`,
+        args: [{ repoFullName: 'example/repo', autoMerge: false }],
+      }),
+    );
+
+    expect(calls.log[0]).toMatchObject({
+      name: 'cloneRepoActivity',
+      args: [
+        {
+          branch: expect.stringMatching(/^agent\/refactor\/periodic-test-/),
+          ref: 'main',
+        },
+      ],
+    });
+  });
 });

@@ -3,6 +3,11 @@ import * as path from 'path';
 import * as os from 'os';
 import { ApplicationFailure, log } from '@temporalio/activity';
 import { execCommand, execOrThrow } from './exec';
+import {
+  assertValidGitBranchName,
+  assertValidRepoFullName,
+  InvalidInputError,
+} from '../validation';
 
 export interface CloneInput {
   repoFullName: string;
@@ -46,7 +51,24 @@ function gitCloneUrl(repoFullName: string): string {
   return `https://github.com/${repoFullName}.git`;
 }
 
+function validateInput(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof InvalidInputError) {
+      throw ApplicationFailure.nonRetryable(err.message, 'InvalidInput');
+    }
+    throw err;
+  }
+}
+
 export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput> {
+  validateInput(() => {
+    assertValidRepoFullName(input.repoFullName);
+    assertValidGitBranchName(input.branch);
+    if (input.ref) assertValidGitBranchName(input.ref, 'ref');
+  });
+
   const root = input.workspaceRoot ?? path.join(os.tmpdir(), 'repo-steward-workspaces');
   await fs.mkdir(root, { recursive: true });
   const safeName = input.repoFullName.replace('/', '__');
@@ -107,6 +129,8 @@ export interface PushInput {
 }
 
 export async function pushBranchActivity(input: PushInput): Promise<void> {
+  validateInput(() => assertValidGitBranchName(input.branch));
+
   const env = ghAuthEnv();
   const args = ['push'];
   if (input.setUpstream) args.push('-u');
@@ -138,6 +162,8 @@ async function isMergeInProgress(workdir: string): Promise<boolean> {
 export async function checkConflictActivity(
   input: CheckConflictInput,
 ): Promise<CheckConflictOutput> {
+  validateInput(() => assertValidGitBranchName(input.baseBranch, 'baseBranch'));
+
   const env = ghAuthEnv();
   await execOrThrow('git', ['fetch', 'origin', input.baseBranch], { cwd: input.workdir, env });
 
