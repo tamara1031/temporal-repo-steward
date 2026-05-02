@@ -54,6 +54,12 @@ services:
       - ${HOME}/.codex/auth.json:/home/agent/.codex/auth.json:ro
       # workdir 用の永続ボリューム（コンテナ再起動でも消えない）
       - workspaces:/workspaces
+    # Codex の bubblewrap サンドボックス（--sandbox workspace-write 等）は非特権
+    # user namespace 作成を必要とする。Docker のデフォルト seccomp プロファイルが
+    # `unshare(CLONE_NEWUSER)` を遮断するため、bwrap を有効化したい場合のみ
+    # seccomp=unconfined にする。bypass フラグ運用なら無くても良い。
+    security_opt:
+      - seccomp=unconfined
     restart: unless-stopped
 
 volumes:
