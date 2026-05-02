@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel any in-flight run for the same ref when a new push lands —
+# saves CI minutes on rapid iteration (e.g. agent self-heal cycles).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build / lint / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript build
+        run: npm run build
+
+      - name: Lint (src)
+        run: npm run lint
+
+      - name: Lint (tests)
+        run: npm run lint.tests
+
+      - name: Test
+        run: npm test
+        env:
+          # Vitest has a 60s timeout configured in vitest.config.ts;
+          # CI runners can be slower than local — bump the inner Temporal
+          # test-server boot allowance.
+          CI: 'true'
