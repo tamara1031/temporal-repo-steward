@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { MockActivityEnvironment } from '@temporalio/testing';
-import { execCommand, execOrThrow, CommandFailed } from '../src/activities/_exec';
+import { execCommand, execOrThrow, CommandFailed } from '../src/activities/exec';
 
-describe('_exec helpers', () => {
+describe('exec helpers', () => {
   it('executes a command and captures stdout', async () => {
     const env = new MockActivityEnvironment();
     const res = await env.run(async () => execCommand('printf', ['hello']));

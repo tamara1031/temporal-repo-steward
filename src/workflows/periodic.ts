@@ -5,8 +5,8 @@ import {
   ChildWorkflowCancellationType,
   ParentClosePolicy,
 } from '@temporalio/workflow';
-import { cheap, heavy } from './_activity-options';
-import { robustPRMergeWorkflow } from './shared/pr_lifecycle';
+import { cheap, heavy } from './proxies';
+import { robustPRMergeWorkflow } from './pr-lifecycle';
 
 export interface PeriodicRefactorInput {
   repoFullName: string;

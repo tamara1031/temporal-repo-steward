@@ -1,5 +1,5 @@
 import { log, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
-import { cheap, heavy, ciWait } from '../_activity-options';
+import { cheap, heavy, ciWait } from './proxies';
 
 export interface RobustPRMergeInput {
   repoFullName: string;

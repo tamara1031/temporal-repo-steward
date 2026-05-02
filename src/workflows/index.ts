@@ -1,2 +1,2 @@
 export { periodicRefactorWorkflow } from './periodic';
-export { robustPRMergeWorkflow } from './shared/pr_lifecycle';
+export { robustPRMergeWorkflow } from './pr-lifecycle';

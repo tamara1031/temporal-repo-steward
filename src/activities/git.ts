@@ -2,7 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ApplicationFailure, log } from '@temporalio/activity';
-import { execCommand, execOrThrow } from './_exec';
+import { execCommand, execOrThrow } from './exec';
 
 export interface CloneInput {
   repoFullName: string;

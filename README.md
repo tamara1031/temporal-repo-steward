@@ -21,6 +21,7 @@ Temporal Schedule ──▶ periodicRefactorWorkflow ──▶ robustPRMergeWork
 ```
 .
 ├── Dockerfile              # Node20 + gh + codex
+├── docker-compose.yml      # Temporal dev + Worker のローカル一括起動
 ├── package.json            # @temporalio/* (~1.11)
 ├── tsconfig.json
 ├── .env.example            # Worker が読む環境変数のテンプレート
@@ -28,19 +29,25 @@ Temporal Schedule ──▶ periodicRefactorWorkflow ──▶ robustPRMergeWork
 ├── scripts/
 │   └── schedule-setup.sh   # temporal schedule create --upsert
 ├── src/
-│   ├── constants.ts
+│   ├── constants.ts        # TASK_QUEUE
 │   ├── worker.ts           # Worker 起動エントリ
 │   ├── client.ts           # 開発用クライアント (install-schedule / run-once)
 │   ├── activities/
-│   │   ├── _exec.ts        # spawn ラッパー (heartbeat + cancellation)
+│   │   ├── exec.ts         # spawn ラッパー (heartbeat + cancellation)
 │   │   ├── git.ts          # clone / commit / push / conflict 検知
 │   │   ├── github.ts       # gh CLI: PR, CI poll, merge
 │   │   ├── codex.ts        # codex exec (analyze + apply 統合)
 │   │   └── index.ts
 │   └── workflows/
+│       ├── proxies.ts      # proxyActivities の cheap / heavy / ciWait
 │       ├── periodic.ts     # periodicRefactorWorkflow
-│       └── shared/
-│           └── pr_lifecycle.ts # robustPRMergeWorkflow
+│       ├── pr-lifecycle.ts # robustPRMergeWorkflow
+│       └── index.ts
+├── tests/
+│   ├── exec.test.ts
+│   ├── periodic.test.ts
+│   ├── pr-lifecycle.test.ts
+│   └── helpers.ts
 └── docs/
     ├── architecture.md
     └── deployment-example.md

@@ -101,7 +101,7 @@ loop (≤ maxFixIterations):
 2. **codex CLI の実フラグ**: `codex exec` の引数はバージョン依存。
    CI でバージョン固定し、互換性ブレが起きたら `src/activities/codex.ts` で吸収する。
 3. **Replay テストが未整備**: `Worker.runReplayHistory` を使った履歴互換テストを追加すると、
-   `pr_lifecycle.ts` のような長寿命ワークフローを安全にバージョンアップできる。
+   `pr-lifecycle.ts` のような長寿命ワークフローを安全にバージョンアップできる。
 4. **Issue 駆動ルートの再追加**: 将来 `ai-ready` ラベル付き Issue を処理したくなったら、
    `listAiReadyIssuesActivity` / `updateIssueStatusActivity` を `github.ts` に追加し、
    `issuePollerWorkflow` → `issueDrivenWorkflow` → `robustPRMergeWorkflow` の階層を組む。
