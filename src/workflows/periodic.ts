@@ -7,6 +7,7 @@ import {
 } from '@temporalio/workflow';
 import { cheap, heavy } from './proxies';
 import { robustPRMergeWorkflow } from './pr-lifecycle';
+import { buildRefactorPrompt } from './refactor-prompt';
 
 export interface PeriodicRefactorInput {
   repoFullName: string;
@@ -44,15 +45,7 @@ export async function periodicRefactorWorkflow(
   try {
     const result = await heavy.codexActivity({
       workdir: clone.workdir,
-      systemPrompt:
-        'You are a careful refactoring engineer. Apply only safe, narrow refactors. ' +
-        'Do not introduce new dependencies. Keep tests green. Stop after at most 3 ' +
-        'opportunities — quality over quantity.',
-      prompt:
-        'Survey this repository for safe, narrow refactors that improve clarity or remove ' +
-        'duplication WITHOUT changing observable behavior. Apply up to 3 of them directly to ' +
-        'the working tree, then stop. ' +
-        (input.refactorBrief ?? ''),
+      prompt: buildRefactorPrompt(input.refactorBrief),
     });
 
     if (result.changedFiles.length === 0) {
