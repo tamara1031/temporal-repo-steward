@@ -63,10 +63,21 @@ export async function execCommand(
   const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}) };
 
   return await new Promise<ExecResult>((resolve, reject) => {
+    // `detached: true` makes the child the leader of a new process group on
+    // Linux. We need this so that on cancel / timeout we can kill the entire
+    // tree (e.g. codex orchestrator → subagent codex processes) by signaling
+    // the process group via `process.kill(-pid)`. Without it, only the direct
+    // child receives SIGTERM and grandchildren survive as orphans, which is
+    // exactly what bit us during a workflow terminate (subagent codex runs
+    // continued for ~6 min after the parent activity was cancelled).
+    //
+    // Note: we deliberately do NOT call `child.unref()`. We still want the
+    // event loop to track this child until it exits.
     const child = spawn(command, args as string[], {
       cwd: options.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
     });
 
     const stdoutBuf: Buffer[] = [];
@@ -81,11 +92,37 @@ export async function execCommand(
         ? setInterval(() => hooks.heartbeat({ command, pid: child.pid }), heartbeatMs)
         : undefined;
 
+    /**
+     * Kill the child AND every descendant by signaling the process group.
+     * On Linux, `process.kill(-pid, sig)` (negative pid) sends `sig` to every
+     * process whose PGID equals `pid`. Because we spawned with detached:true,
+     * `child.pid` is itself the PGID.
+     */
+    const signalGroup = (sig: NodeJS.Signals): void => {
+      const pid = child.pid;
+      if (pid === undefined) return;
+      try {
+        process.kill(-pid, sig);
+      } catch (err) {
+        // ESRCH = the group is already gone. Anything else: fall back to a
+        // direct signal on the leader so we at least try.
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          try {
+            child.kill(sig);
+          } catch {
+            /* leader already exited too */
+          }
+        }
+      }
+    };
+
     const killChild = (): void => {
-      if (child.killed) return;
-      child.kill('SIGTERM');
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      signalGroup('SIGTERM');
       setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) {
+          signalGroup('SIGKILL');
+        }
       }, 5_000).unref();
     };
 
