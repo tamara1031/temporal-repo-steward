@@ -4,11 +4,11 @@
 # Required env:
 #   TEMPORAL_ADDRESS    e.g. temporal-frontend.temporal.svc.cluster.local:7233
 #   TEMPORAL_NAMESPACE  e.g. default
-#   AGENT_REPO          e.g. yamato/temporal-homelab
+#   AGENT_REPO          e.g. tamara1031/temporal-repo-steward
 #
 # Optional env:
 #   AGENT_BASE_BRANCH   default: main
-#   AGENT_TASK_QUEUE    default: agent-platform
+#   AGENT_TASK_QUEUE    default: repo-steward
 #   PERIODIC_CRON       default: "0 * * * *"  (hourly)
 #
 set -euo pipefail
@@ -18,7 +18,7 @@ set -euo pipefail
 : "${AGENT_REPO:?AGENT_REPO is required (owner/repo form)}"
 
 BASE_BRANCH="${AGENT_BASE_BRANCH:-main}"
-TASK_QUEUE="${AGENT_TASK_QUEUE:-agent-platform}"
+TASK_QUEUE="${AGENT_TASK_QUEUE:-repo-steward}"
 PERIODIC_CRON="${PERIODIC_CRON:-0 * * * *}"
 
 REPO_SAFE="${AGENT_REPO//\//__}"

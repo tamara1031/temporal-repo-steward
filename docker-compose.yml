@@ -6,7 +6,7 @@
 #
 # Trigger a workflow once both are up:
 #   docker compose exec temporal temporal workflow start \
-#       --task-queue agent-platform \
+#       --task-queue repo-steward \
 #       --workflow-id smoke-$(date +%s) \
 #       --type periodicRefactorWorkflow \
 #       --input '{"repoFullName":"<owner>/<repo>","baseBranch":"main"}'
@@ -36,7 +36,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: agent-platform:dev
+    image: temporal-repo-steward:dev
     container_name: agent-worker
     depends_on:
       temporal:
@@ -46,7 +46,7 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
-      TEMPORAL_TASK_QUEUE: agent-platform
+      TEMPORAL_TASK_QUEUE: repo-steward
       TEMPORAL_TLS: "false"
       HOME: /home/agent
     volumes:

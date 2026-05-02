@@ -14,13 +14,13 @@
 
 ## 環境変数
 
-`agent-platform-config` ConfigMap 相当に渡したい値:
+`repo-steward-config` ConfigMap 相当に渡したい値:
 
 | Key | 既定値 | 用途 |
 | --- | --- | --- |
 | `TEMPORAL_ADDRESS` | `temporal-frontend.temporal.svc.cluster.local:7233` | Temporal Frontend |
 | `TEMPORAL_NAMESPACE` | `default` | 名前空間 |
-| `TEMPORAL_TASK_QUEUE` | `agent-platform` | Worker のタスクキュー |
+| `TEMPORAL_TASK_QUEUE` | `repo-steward` | Worker のタスクキュー |
 | `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | `4` | アクティビティ並列度 |
 | `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | `20` | ワークフロータスク並列度 |
 | `TEMPORAL_TLS` | `false` | mTLS 利用時に `true` |
@@ -31,8 +31,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent-platform-worker
-  namespace: agent-platform
+  name: repo-steward-worker
+  namespace: repo-steward
 spec:
   # workdir はローカル emptyDir に置くため、PR ライフサイクル子ワークフローを
   # またいで同一 Pod 上で完結する必要があります。スケールするなら
@@ -41,11 +41,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: agent-platform-worker
+      app: repo-steward-worker
   template:
     metadata:
       labels:
-        app: agent-platform-worker
+        app: repo-steward-worker
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -54,10 +54,10 @@ spec:
         fsGroup: 1001
       containers:
         - name: worker
-          image: ghcr.io/<owner>/agent-platform:latest
+          image: ghcr.io/<owner>/temporal-repo-steward:preview
           envFrom:
             - configMapRef:
-                name: agent-platform-config
+                name: repo-steward-config
           env:
             - name: GITHUB_TOKEN
               valueFrom:
@@ -93,10 +93,10 @@ spec:
 事前にローカルで `codex login`（ブラウザフロー）を実行し、`~/.codex/auth.json` を生成しておきます。
 
 ```bash
-kubectl -n agent-platform create secret generic github-token \
+kubectl -n repo-steward create secret generic github-token \
   --from-literal=token="$GITHUB_TOKEN"
 
-kubectl -n agent-platform create secret generic codex-auth \
+kubectl -n repo-steward create secret generic codex-auth \
   --from-file=auth.json="$HOME/.codex/auth.json"
 ```
 
@@ -109,12 +109,12 @@ kubectl -n agent-platform create secret generic codex-auth \
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: agent-platform-outbound-only
-  namespace: agent-platform
+  name: repo-steward-outbound-only
+  namespace: repo-steward
 spec:
   podSelector:
     matchLabels:
-      app: agent-platform-worker
+      app: repo-steward-worker
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
@@ -156,7 +156,7 @@ spec:
   ```bash
   read -s GITHUB_TOKEN  # 入力エコーされない
   printf '%s' "$GITHUB_TOKEN" \
-    | kubectl -n agent-platform create secret generic github-token \
+    | kubectl -n repo-steward create secret generic github-token \
         --dry-run=client -o yaml --from-file=token=/dev/stdin \
     | kubectl apply -f -
   ```

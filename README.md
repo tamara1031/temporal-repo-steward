@@ -1,4 +1,4 @@
-# temporal-homelab / agent-platform
+# temporal-repo-steward
 
 Pull 型・Webhook 不要・Temporal 駆動の自律 AI エージェント基盤。
 定期的にリポジトリを巡回してリファクタ PR を出し、CI が落ちたら自己修復してマージまで完遂する。

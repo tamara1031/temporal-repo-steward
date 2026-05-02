@@ -47,7 +47,7 @@ function gitCloneUrl(repoFullName: string): string {
 }
 
 export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput> {
-  const root = input.workspaceRoot ?? path.join(os.tmpdir(), 'agent-platform-workspaces');
+  const root = input.workspaceRoot ?? path.join(os.tmpdir(), 'repo-steward-workspaces');
   await fs.mkdir(root, { recursive: true });
   const safeName = input.repoFullName.replace('/', '__');
   const workdir = await fs.mkdtemp(path.join(root, `${safeName}-`));
@@ -60,7 +60,7 @@ export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput>
   await execOrThrow('git', ['config', 'user.email', 'ai-agent@users.noreply.github.com'], {
     cwd: workdir,
   });
-  await execOrThrow('git', ['config', 'user.name', 'agent-platform-bot'], { cwd: workdir });
+  await execOrThrow('git', ['config', 'user.name', 'repo-steward-bot'], { cwd: workdir });
 
   if (input.ref) {
     await execOrThrow('git', ['fetch', 'origin', input.ref], { cwd: workdir, env });

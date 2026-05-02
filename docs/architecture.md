@@ -21,7 +21,7 @@
 │  ├─ checkConflict ⇄ resolve (codex)          ◀── retry                   │
 │  └─ mergePR                                                               │
 └──────────────────────────────────────────────────────────────────────────┘
-                  │ poll task queue: agent-platform
+                  │ poll task queue: repo-steward
                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Worker Pod(s)                                                           │
@@ -80,7 +80,7 @@ loop (≤ maxFixIterations):
 ## 取り扱う状態
 
 ### Workspace
-`os.tmpdir()/agent-platform-workspaces/<repo>__<random>` に clone する。
+`os.tmpdir()/repo-steward-workspaces/<repo>__<random>` に clone する。
 `cleanupWorkspaceActivity` が finally で必ず削除。
 
 ### Branch 命名

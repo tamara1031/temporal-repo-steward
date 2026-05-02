@@ -50,7 +50,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     TEMPORAL_ADDRESS=temporal-frontend.temporal.svc.cluster.local:7233 \
     TEMPORAL_NAMESPACE=default \
-    TEMPORAL_TASK_QUEUE=agent-platform \
+    TEMPORAL_TASK_QUEUE=repo-steward \
     HOME=/home/agent
 
 RUN useradd -m -u 1001 -d /home/agent agent \

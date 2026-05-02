@@ -1,1 +1,1 @@
-export const TASK_QUEUE = 'agent-platform';
+export const TASK_QUEUE = 'repo-steward';
