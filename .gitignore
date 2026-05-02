@@ -1,8 +1,29 @@
+# --- secrets ---
 .env
+.env.local
+.env.*.local
+auth.json
+credentials*.json
+*.pem
+*.key
 
-# APM dependencies
+# --- APM dependencies ---
 apm_modules/
 
-# node dependencies
+# --- node / TS build ---
 node_modules/
 dist/
+*.tsbuildinfo
+
+# --- test / coverage artifacts ---
+coverage/
+.vitest/
+.nyc_output/
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+
+# --- runtime logs ---
+*.log

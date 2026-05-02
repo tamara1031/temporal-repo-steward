@@ -89,6 +89,39 @@ npm test
 `OPENAI_API_KEY` は使いません。codex CLI のブラウザログインで作られる `auth.json`
 を Worker にマウントする方式です（`CODEX_HOME` でディレクトリを上書き可）。
 
+### GitHub PAT に必要な権限
+
+PAT は **agent が PR を出すことになる対象 repo** に対して以下の権限が必要です。
+
+#### 推奨: Fine-grained PAT（単一 repo にスコープ）
+
+| 権限 | レベル | 用途 |
+| --- | --- | --- |
+| `Contents` | Read & Write | clone / branch 作成 / push |
+| `Pull requests` | Read & Write | PR 作成 / マージ |
+| `Actions` | Read | `gh run view --log-failed`（CI 失敗ログ取得） |
+| `Workflows` | Read & Write | `.github/workflows/*.yml` を編集する PR を作る場合に必要 |
+| `Metadata` | Read | 全 fine-grained PAT で自動付与 |
+
+> Workflows 権限を外すとリファクタが workflow ファイルを触ったときに push が拒否されます。
+> 不安なら最初は付けて、運用後に必要性を見直してください。
+
+#### 簡易: Classic PAT
+
+最低限のスコープ:
+
+- `repo`（フルアクセス。Contents / PR / Actions / Workflows をまとめてカバー）
+- `workflow`（`.github/workflows` への書き込みが発生する場合）
+
+> Classic PAT はオーナー全体にアクセスが行くため、可能なら fine-grained を推奨。
+
+#### 失効と更新
+
+- 期限を 90 日 など短めに設定し、Secret ローテーションの運用を作っておくこと。
+- 失効した場合 Worker は `MissingCredentials` ではなく `gh` / `git` の 401 で失敗します。
+  Activity リトライ上限まで粘った後に Workflow が失敗する。Temporal Web UI（`:8233`）の
+  失敗履歴で `401 Unauthorized` を見つけたら PAT 期限切れを疑う。
+
 実運用 (Kubernetes) では Secret として homelab 側で管理。サンプルマニフェストは
 [`docs/deployment-example.md`](./docs/deployment-example.md) を参照。
 
