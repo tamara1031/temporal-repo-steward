@@ -17,6 +17,12 @@ export interface CloneOutput {
   baseSha: string;
 }
 
+/**
+ * Build env that authenticates git over HTTPS to github.com WITHOUT putting
+ * the token in argv or in the persistent on-disk git config. The auth header
+ * lives only in process env, which is not logged in stderr or in our
+ * `CommandFailed` error messages (which only echo argv).
+ */
 function ghAuthEnv(): NodeJS.ProcessEnv {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -25,16 +31,19 @@ function ghAuthEnv(): NodeJS.ProcessEnv {
       'MissingCredentials',
     );
   }
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
   return {
     GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
     GH_TOKEN: token,
     GITHUB_TOKEN: token,
   };
 }
 
 function gitCloneUrl(repoFullName: string): string {
-  const token = process.env.GITHUB_TOKEN;
-  return `https://x-access-token:${token}@github.com/${repoFullName}.git`;
+  return `https://github.com/${repoFullName}.git`;
 }
 
 export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput> {

@@ -1,5 +1,5 @@
 import { ApplicationFailure, Context, log } from '@temporalio/activity';
-import { execOrThrow } from './_exec';
+import { execCommand, execOrThrow } from './_exec';
 
 function ghEnv(): NodeJS.ProcessEnv {
   const token = process.env.GITHUB_TOKEN;

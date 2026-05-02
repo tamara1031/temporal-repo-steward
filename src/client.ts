@@ -3,6 +3,7 @@
  * machine. Production schedule install lives in scripts/schedule-setup.sh
  * (which uses the temporal CLI directly).
  */
+import 'dotenv/config';
 import { Client, Connection, ScheduleOverlapPolicy } from '@temporalio/client';
 import { TASK_QUEUE } from './constants';
 import { periodicRefactorWorkflow } from './workflows';
