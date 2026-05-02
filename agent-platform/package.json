@@ -1,0 +1,33 @@
+{
+  "name": "agent-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pull-based autonomous AI agent platform built on Temporal",
+  "main": "dist/worker.js",
+  "scripts": {
+    "build": "tsc",
+    "build.bundle": "ts-node scripts/build-bundle.ts",
+    "start.worker": "node dist/worker.js",
+    "start.worker.dev": "ts-node src/worker.ts",
+    "start.client": "ts-node src/client.ts",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@temporalio/activity": "~1.11.8",
+    "@temporalio/client": "~1.11.8",
+    "@temporalio/common": "~1.11.8",
+    "@temporalio/worker": "~1.11.8",
+    "@temporalio/workflow": "~1.11.8",
+    "ms": "^2.1.3"
+  },
+  "devDependencies": {
+    "@types/ms": "^0.7.34",
+    "@types/node": "^20.11.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
