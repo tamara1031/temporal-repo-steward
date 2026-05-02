@@ -8,6 +8,7 @@ target:
 dependencies:
   apm:
   - tamara1031/easy-agents/easy-agent
+  - temporalio/agent-skills
   mcp: []
 scripts:
   install: apm install --no-policy

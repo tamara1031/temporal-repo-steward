@@ -1,5 +1,5 @@
 lockfile_version: '1'
-generated_at: '2026-05-02T16:25:10.214715+00:00'
+generated_at: '2026-05-02T16:28:44.348151+00:00'
 apm_version: 0.10.0
 dependencies:
 - repo_url: mizchi/skills
@@ -26,6 +26,14 @@ dependencies:
     .claude/agents/easy-agent.md: sha256:56b0c57dc4558585ea1bf938006281364097d7fb111a483ae4d9302c85b024f9
     .github/agents/easy-agent.agent.md: sha256:56b0c57dc4558585ea1bf938006281364097d7fb111a483ae4d9302c85b024f9
   content_hash: sha256:0511f195ef9e12958193253d597f99c601fdb460407b1b540d4dfeedaadd1a70
+- repo_url: temporalio/agent-skills
+  host: github.com
+  resolved_commit: 0e57bd0374de097c5a0aaac4aff93f06728ed2c0
+  package_type: marketplace_plugin
+  deployed_files:
+  - .claude/skills/temporal-developer
+  - .github/skills/temporal-developer
+  content_hash: sha256:048180d91ba839bcfc5752309cadd65e53a521f15fa612434e6efa07b06ac20f
 - repo_url: tamara1031/easy-agents
   host: github.com
   resolved_commit: 3ffcc7cb345663b5408957ab7b4f5b62a29af837
