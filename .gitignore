@@ -27,3 +27,5 @@ coverage/
 
 # --- runtime logs ---
 *.log
+
+.claude/scheduled_tasks.lock
