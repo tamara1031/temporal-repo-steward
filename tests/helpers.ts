@@ -66,14 +66,51 @@ export function makeMockActivities(
     })),
     fetchFailedRunLogsActivity: record('fetchFailedRunLogsActivity', async () => 'log lines'),
     mergePRActivity: record('mergePRActivity', async () => undefined),
+    // Generic codex activity — used by pr-lifecycle for CI self-heal and
+    // merge-conflict resolution. The refactor pipeline does NOT route through
+    // this; it uses the role-specific activities below.
     codexActivity: record('codexActivity', async () => ({
       message: 'codex stub message',
-      raw: 'codex stub message',
       changedFiles: ['src/foo.ts'],
     })),
+    // Refactor-pipeline role activities. Defaults model the happy path: a
+    // 1-step plan, a non-trivial implement diff, both reviewers OK on iter 0.
+    planActivity: record('planActivity', async () => ({
+      theme: 'tighten module boundaries',
+      rationale: 'reduces inter-module coupling',
+      steps: [
+        {
+          title: 'extract shared types',
+          description: 'move shared interfaces into a dedicated module',
+          critical_requirements: ['all existing unit tests still pass'],
+        },
+      ],
+    })),
+    implementActivity: record('implementActivity', async () => ({
+      report: '## Changed files\n- src/foo.ts\n## Critical requirements\n- met',
+    })),
+    reviewActivity: record('reviewActivity', async () => ({
+      verdict: 'ok' as const,
+      blocking_issues: [],
+      suggestions: [],
+    })),
+    // Git helpers used by the refactor workflow.
+    diffStatActivity: record('diffStatActivity', async () => ({
+      filesChanged: 4,
+      insertions: 80,
+      deletions: 20,
+    })),
+    diffTextActivity: record('diffTextActivity', async () => ({
+      text: 'diff --git a/src/foo.ts b/src/foo.ts\n@@ stub diff @@',
+      truncated: false,
+    })),
+    statusPorcelainActivity: record('statusPorcelainActivity', async () => ({
+      entries: [' M src/foo.ts'],
+    })),
+    restoreActivity: record('restoreActivity', async () => undefined),
   };
 
-  const merged: typeof activities = { ...defaults } as typeof activities;
+  const merged: typeof activities = { ...defaults } as unknown as typeof activities;
   for (const [name, fn] of Object.entries(overrides)) {
     if (typeof fn === 'function') {
       (merged as any)[name] = record(name, fn as any);

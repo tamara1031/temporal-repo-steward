@@ -68,10 +68,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 
-# Codex subagent definitions (Parliament-style refactor pipeline) and global
-# codex config. The CLI auto-discovers agents from $HOME/.codex/agents/.
-COPY --chown=agent:agent agents/ /home/agent/.codex/agents/
-COPY --chown=agent:agent codex-config/config.toml /home/agent/.codex/config.toml
+# Codex CLI is invoked once per role from `src/activities/refactor.ts` with
+# inline prompts — there are no codex subagent TOMLs to bake into the image.
+# (Auth lives at $HOME/.codex/auth.json, mounted at runtime as a Secret.)
 
 USER agent
 WORKDIR /app

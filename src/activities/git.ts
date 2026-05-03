@@ -208,3 +208,94 @@ export interface CleanupInput {
 export async function cleanupWorkspaceActivity(input: CleanupInput): Promise<void> {
   await fs.rm(input.workdir, { recursive: true, force: true });
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Refactor-pipeline git helpers (used by periodicRefactorWorkflow's
+// pre-Parliament gate, drift audit, and rollback paths). Each is a separate
+// Activity so the Temporal UI shows the gate decision and drift state.
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface DiffStatInput {
+  workdir: string;
+}
+
+export interface DiffStatOutput {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+/**
+ * Parse `git diff --shortstat` (e.g. " 2 files changed, 18 insertions(+), 7 deletions(-)").
+ * Empty diff returns zeros. Used for the pre-Parliament trivial-diff gate.
+ */
+export async function diffStatActivity(input: DiffStatInput): Promise<DiffStatOutput> {
+  const res = await execOrThrow('git', ['diff', '--shortstat'], { cwd: input.workdir });
+  const text = res.stdout.trim();
+  if (!text) return { filesChanged: 0, insertions: 0, deletions: 0 };
+  const filesMatch = text.match(/(\d+)\s+files?\s+changed/);
+  const insMatch = text.match(/(\d+)\s+insertions?\(\+\)/);
+  const delMatch = text.match(/(\d+)\s+deletions?\(-\)/);
+  return {
+    filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+    insertions: insMatch ? parseInt(insMatch[1], 10) : 0,
+    deletions: delMatch ? parseInt(delMatch[1], 10) : 0,
+  };
+}
+
+export interface DiffTextInput {
+  workdir: string;
+  /** Truncate the returned diff to this many bytes. Default 8 KiB. */
+  maxBytes?: number;
+}
+
+export interface DiffTextOutput {
+  /** UTF-8 truncated diff text. Empty when there are no changes. */
+  text: string;
+  /** True when the underlying `git diff` was longer than `maxBytes`. */
+  truncated: boolean;
+}
+
+/** Full unified diff for reviewer input. Truncated to keep activity payloads small. */
+export async function diffTextActivity(input: DiffTextInput): Promise<DiffTextOutput> {
+  const res = await execOrThrow('git', ['diff'], { cwd: input.workdir });
+  const max = input.maxBytes ?? 8 * 1024;
+  if (res.stdout.length <= max) return { text: res.stdout, truncated: false };
+  return { text: res.stdout.slice(0, max), truncated: true };
+}
+
+export interface PorcelainInput {
+  workdir: string;
+}
+
+export interface PorcelainOutput {
+  /** `git status --porcelain` lines (e.g. ` M src/foo.ts`, `?? src/bar.ts`). */
+  entries: string[];
+}
+
+/** Snapshot working-tree state. Used to detect reviewer drift between Parliament rounds. */
+export async function statusPorcelainActivity(input: PorcelainInput): Promise<PorcelainOutput> {
+  const res = await execOrThrow('git', ['status', '--porcelain'], { cwd: input.workdir });
+  const entries = res.stdout
+    .split('\n')
+    .map((l) => l.replace(/\r$/, ''))
+    .filter(Boolean);
+  return { entries };
+}
+
+export interface RestoreInput {
+  workdir: string;
+  /** When omitted, restores everything (`git restore .`). */
+  paths?: string[];
+}
+
+export async function restoreActivity(input: RestoreInput): Promise<void> {
+  const args = ['checkout', '--'];
+  if (input.paths && input.paths.length > 0) {
+    args.push(...input.paths);
+  } else {
+    // `git restore .` is the documented form, but `git checkout -- .` is universally available.
+    args.push('.');
+  }
+  await execOrThrow('git', args, { cwd: input.workdir });
+}

@@ -1,5 +1,5 @@
 import { log, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
-import { cheap, heavy, ciWait } from './proxies';
+import { cheap, heavy, heavyCodex, ciWait } from './proxies';
 
 export interface RobustPRMergeInput {
   repoFullName: string;
@@ -83,7 +83,7 @@ export async function robustPRMergeWorkflow(
       }
       const failedLogs = logsParts.join('\n\n');
 
-      const fix = await heavy.codexActivity({
+      const fix = await heavyCodex.codexActivity({
         workdir: input.workdir,
         systemPrompt:
           'You are an autonomous fix-it engineer. Identify the failing test/build from ' +
@@ -123,7 +123,7 @@ export async function robustPRMergeWorkflow(
         iter,
         files: conflict.conflictedFiles,
       });
-      const resolve = await heavy.codexActivity({
+      const resolve = await heavyCodex.codexActivity({
         workdir: input.workdir,
         systemPrompt:
           'You resolve git merge conflicts. Preserve intent from both sides whenever possible. ' +

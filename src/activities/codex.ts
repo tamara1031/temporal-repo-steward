@@ -4,41 +4,36 @@ import * as os from 'os';
 import * as path from 'path';
 import { execCommand } from './exec';
 
-export interface CodexInput {
+/**
+ * Low-level `codex exec` runner shared by every role-specific activity in
+ * `refactor.ts`. This is intentionally NOT a Temporal Activity itself — each
+ * role (planner / implementer / reviewer) is its own Activity so the Temporal
+ * UI shows one event per role and per-role retries / timeouts are independent.
+ *
+ * Authentication: codex finds its credentials at `~/.codex/auth.json` (or
+ * `$CODEX_HOME/auth.json`). On a Worker pod, mount the file produced by
+ * `codex login` as a Secret. No OPENAI_API_KEY is required.
+ */
+
+export interface CodexRunInput {
   workdir: string;
+  /** The full prompt fed to `codex exec` on stdin. */
   prompt: string;
-  /** Optional system-level instruction prepended to the prompt. */
-  systemPrompt?: string;
-  /** Optional supporting context (logs, diffs, prior analysis) prepended to the prompt. */
-  context?: string;
-  /** Files to focus on. Appended to the prompt as a hint; codex still has full repo access. */
-  paths?: string[];
+  /** Per-role timeout. The workflow proxy's startToCloseTimeout is the outer bound. */
+  timeoutMs: number;
+  /** Optional model override (otherwise uses codex's default). */
   model?: string;
-  timeoutMs?: number;
 }
 
-export interface CodexOutput {
-  /** Trimmed stdout from codex (truncated to 16 KiB). */
-  message: string;
-  /** Full raw stdout. */
-  raw: string;
-  /** Files codex modified, derived from `git status --porcelain`. */
-  changedFiles: string[];
+export interface CodexRunOutput {
+  /** Final reply captured via `--output-last-message` (preferred for parsing). */
+  lastMessage: string;
+  /** Combined stdout (kept for diagnostics — do NOT propagate through workflow state). */
+  stdoutForLog: string;
 }
 
-/**
- * Internal exec timeout. Larger than the legacy 30-min default because the
- * orchestrator prompt now runs a Plan → Implement → Parliament-Review pipeline
- * with ~30 subagent spawns. Keep this slightly below the workflow proxy's
- * `startToCloseTimeout` (currently 90 min in `bigCodex`) so codex shuts itself
- * down cleanly before Temporal kills the activity.
- */
-const DEFAULT_TIMEOUT_MS = 80 * 60 * 1000;
+const DEFAULT_BACKSTOP_TIMEOUT_MS = 30 * 60 * 1000;
 
-/**
- * Path to the auth file produced by `codex login` (browser-based ChatGPT login).
- * Override with `CODEX_HOME` to point at a different directory.
- */
 function codexAuthPath(): string {
   const home = process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
   return path.join(home, 'auth.json');
@@ -56,46 +51,15 @@ async function ensureCodexAuth(): Promise<void> {
   }
 }
 
-async function changedFilesIn(workdir: string): Promise<string[]> {
-  const res = await execCommand('git', ['status', '--porcelain'], { cwd: workdir });
-  if (res.code !== 0) return [];
-  return res.stdout
-    .split('\n')
-    .map((l) => l.slice(3).trim())
-    .filter(Boolean);
-}
-
 /**
- * Runs `codex exec` against the working tree at `workdir`.
- *
- * - If the prompt asks codex to inspect only, no files are modified and
- *   `changedFiles` is empty — i.e. this doubles as an analysis activity.
- * - If the prompt asks codex to edit, modifications land in the working tree
- *   and `changedFiles` lists them. Commit / push happens in the workflow.
- *
- * Authentication: codex finds its credentials at `~/.codex/auth.json` (or
- * `$CODEX_HOME/auth.json`). On a Worker pod, mount the file produced by
- * `codex login` as a Secret. No OPENAI_API_KEY is required.
+ * Run `codex exec` once with the given prompt. Returns the structured outputs
+ * the calling role activity needs. The `--ask-for-approval never` and
+ * `--sandbox workspace-write` flags are not configurable here — they are the
+ * security envelope codex runs under in this system.
  */
-export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
+export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput> {
   await ensureCodexAuth();
 
-  // Approval policy and sandbox are set explicitly:
-  //   --ask-for-approval never   → top-level codex flag, must precede `exec`.
-  //                                Skips every approval prompt; failures are
-  //                                returned to the model rather than escalated.
-  //   --sandbox workspace-write  → confines writes to [workdir, /tmp,
-  //                                ~/.codex/memories]. The Docker container is
-  //                                the outer security boundary.
-  //
-  // Caveat: empirically subagents inherit the parent's effective sandbox; the
-  // per-agent TOML `sandbox_mode` field is documentation only in codex 0.128.
-  // Read-only enforcement for reviewers is therefore prompt + post-hoc
-  // `git diff` audit, not the TOML field.
-  //
-  // `--output-last-message` lets us capture the orchestrator's *final* reply
-  // separately from the noisy combined stdout (which contains every subagent
-  // spawn / wait line). The final reply is what we want as PR body.
   const lastMsgDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-last-msg-'));
   const lastMsgPath = path.join(lastMsgDir, 'final.md');
   const args = [
@@ -109,26 +73,17 @@ export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
   ];
   if (input.model) args.push('--model', input.model);
 
-  const parts = [input.systemPrompt?.trim(), input.context?.trim(), input.prompt.trim()]
-    .filter(Boolean) as string[];
-  if (input.paths && input.paths.length > 0) {
-    parts.push('Focus on these paths:\n' + input.paths.map((p) => ` - ${p}`).join('\n'));
-  }
-  const fullPrompt = parts.join('\n\n');
-
   try {
     const res = await execCommand('codex', args, {
       cwd: input.workdir,
-      input: fullPrompt,
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      input: input.prompt,
+      timeoutMs: input.timeoutMs ?? DEFAULT_BACKSTOP_TIMEOUT_MS,
       env: {
-        // Codex CLI honors HOME (and CODEX_HOME) to locate auth.json.
         HOME: process.env.HOME ?? os.homedir(),
         ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
         CODEX_NON_INTERACTIVE: '1',
-        // Defense-in-depth: the prompt forbids `git push` / `gh`, but with sandbox
-        // bypassed we also strip GitHub credentials from codex's child shell so a
-        // disobedient model cannot exfiltrate or push with them.
+        // Defense-in-depth: even though we don't ask codex to push, strip GitHub
+        // creds from its child shell so a disobedient model can't exfiltrate.
         GITHUB_TOKEN: undefined,
         GH_TOKEN: undefined,
       },
@@ -142,14 +97,10 @@ export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
       });
     }
 
-    const lastMessage = await readLastMessage(lastMsgPath);
-    const changedFiles = await changedFilesIn(input.workdir);
+    const last = await readLastMessage(lastMsgPath);
     return {
-      // Prefer the orchestrator's clean final reply for downstream consumers
-      // (PR body); fall back to stdout when codex didn't write the file.
-      message: (lastMessage ?? res.stdout).trim().slice(0, 16 * 1024),
-      raw: res.stdout,
-      changedFiles,
+      lastMessage: (last ?? res.stdout).trim(),
+      stdoutForLog: res.stdout,
     };
   } finally {
     await fs.rm(lastMsgDir, { recursive: true, force: true }).catch(() => undefined);
@@ -164,4 +115,65 @@ async function readLastMessage(p: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// `codexActivity` — generic single-shot codex Activity used outside the
+// refactor pipeline (CI self-heal, merge-conflict resolution in pr-lifecycle).
+// The refactor pipeline uses the role-specific activities in `refactor.ts`
+// for visibility; this one is for ad-hoc "run codex on the working tree once"
+// scenarios where decomposition adds no value.
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface CodexInput {
+  workdir: string;
+  prompt: string;
+  /** Optional system-level instruction prepended to the prompt. */
+  systemPrompt?: string;
+  /** Optional supporting context (logs, diffs) prepended to the prompt. */
+  context?: string;
+  /** Files to focus on. Appended as a hint; codex still has full repo access. */
+  paths?: string[];
+  model?: string;
+  timeoutMs?: number;
+}
+
+export interface CodexOutput {
+  /** Trimmed last message (truncated to 16 KiB). */
+  message: string;
+  /** Files codex modified, derived from `git status --porcelain`. */
+  changedFiles: string[];
+}
+
+const GENERIC_DEFAULT_TIMEOUT_MS = 80 * 60 * 1000;
+
+export async function codexActivity(input: CodexInput): Promise<CodexOutput> {
+  const parts = [input.systemPrompt?.trim(), input.context?.trim(), input.prompt.trim()].filter(
+    Boolean,
+  ) as string[];
+  if (input.paths && input.paths.length > 0) {
+    parts.push('Focus on these paths:\n' + input.paths.map((p) => ` - ${p}`).join('\n'));
+  }
+  const fullPrompt = parts.join('\n\n');
+
+  const out = await runCodexExec({
+    workdir: input.workdir,
+    prompt: fullPrompt,
+    timeoutMs: input.timeoutMs ?? GENERIC_DEFAULT_TIMEOUT_MS,
+    model: input.model,
+  });
+  const changedFiles = await changedFilesIn(input.workdir);
+  return {
+    message: out.lastMessage.slice(0, 16 * 1024),
+    changedFiles,
+  };
+}
+
+async function changedFilesIn(workdir: string): Promise<string[]> {
+  const res = await execCommand('git', ['status', '--porcelain'], { cwd: workdir });
+  if (res.code !== 0) return [];
+  return res.stdout
+    .split('\n')
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
 }
