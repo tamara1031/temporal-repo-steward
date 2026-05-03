@@ -34,7 +34,7 @@ import type {
   PlanStep,
   ReviewConcern,
 } from '../../activities/refactor';
-import { diffPorcelain } from './porcelain';
+import { arraysEqual, diffPorcelain } from './porcelain';
 import { AdvisorBudget, consultAdvisor, type AdvisorAuditEntry } from './advisor';
 import type { StepRecord } from './refactor-report';
 import type { SpawnCounter } from './spawn-budget';
@@ -116,6 +116,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
   };
   const accumulatedFeedback: string[] = [];
   let lastDiffText: string | undefined;
+  let lastPorcelainEntries: string[] | undefined;
 
   // Commit any accumulated prior-step changes as a checkpoint so that a full
   // restoreActivity({ workdir }) only undoes THIS step's work (HEAD = snapshot).
@@ -162,7 +163,18 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       cheap.statusPorcelainActivity({ workdir }),
       cheap.diffTextActivity({ workdir, maxBytes: reviewDiffBytes }),
     ]);
-    if (iter > 0 && lastDiffText !== undefined && lastDiffText === postImplDiff.text) {
+    // No-progress detection: require BOTH the diff text AND the porcelain
+    // file-set to be unchanged before calling it no-progress.
+    // - diff text captures content changes to tracked files
+    // - porcelain entries capture new untracked files (git diff omits them)
+    // Either signal differing means the implementer made real progress.
+    if (
+      iter > 0 &&
+      lastDiffText !== undefined &&
+      lastPorcelainEntries !== undefined &&
+      lastDiffText === postImplDiff.text &&
+      arraysEqual(lastPorcelainEntries, postImplStatus.entries)
+    ) {
       log.info('no progress between iterations; rolling back this step', {
         step: step.title,
       });
@@ -171,6 +183,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       return { kind: 'completed', record };
     }
     lastDiffText = postImplDiff.text;
+    lastPorcelainEntries = postImplStatus.entries;
 
     // 3. Pre-Parliament Gate (trivial diff → skip Parliament)
     const stat = await cheap.diffStatActivity({ workdir });
