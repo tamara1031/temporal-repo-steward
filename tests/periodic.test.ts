@@ -296,4 +296,34 @@ describe('periodicRefactorWorkflow', () => {
     );
     expect(fullRestores.length).toBe(0);
   });
+  it('sanitizes branch names when workflowId contains colons (e.g. from schedules)', async () => {
+    let capturedBranch = '';
+    const { activities, calls } = makeMockActivities({
+      cloneRepoActivity: async (input: any) => {
+        capturedBranch = input.branch;
+        return { workdir: '/tmp/workdir', branch: input.branch, baseSha: 'sha' };
+      },
+    });
+
+    const taskQueue = 'periodic-test-sanitize';
+    const worker = await Worker.create({
+      connection: env.nativeConnection,
+      taskQueue,
+      workflowBundle: await getWorkflowBundle(),
+      activities,
+    });
+
+    // Simulate a scheduled workflow ID with colons
+    const workflowId = 'periodic-refactor-repo-2026-05-03T10:00:00Z';
+    await worker.runUntil(
+      env.client.workflow.execute(periodicRefactorWorkflow, {
+        taskQueue,
+        workflowId,
+        args: [{ repoFullName: 'example/repo' }],
+      }),
+    );
+
+    expect(capturedBranch).toBe('agent/refactor/periodic-refactor-repo-2026-05-03T10-00-00Z');
+    expect(capturedBranch).not.toContain(':');
+  });
 });

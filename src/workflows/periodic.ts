@@ -114,7 +114,7 @@ export async function periodicRefactorWorkflow(
 ): Promise<PeriodicRefactorOutput> {
   const baseBranch = input.baseBranch ?? 'main';
   const info = workflowInfo();
-  const branch = `agent/refactor/${info.workflowId}`;
+  const branch = `agent/refactor/${info.workflowId}`.replace(/:/g, '-');
 
   const clone = await heavy.cloneRepoActivity({
     repoFullName: input.repoFullName,
