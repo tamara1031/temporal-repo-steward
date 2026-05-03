@@ -36,6 +36,14 @@ const STATIC_HARD_RULES = `Global hard rules (apply to every codex invocation in
 - No network calls (curl / wget / npm install / pip install / etc.).
 - No filler / acknowledgments in your final reply. Output ONLY the artifact requested by your role section. Do not write conversational lines like "I'll review this", "Looks good", "Thanks for the diff", or summary lines that restate what you just did.`;
 
+/**
+ * Render the context artifact body.
+ *
+ * `generatedAt` is intentionally omitted: LLMs don't need the timestamp for
+ * refactoring decisions, and omitting it from prompts avoids spending tokens on
+ * metadata that is only useful for audit/logs (where the field is still
+ * accessible on the `ContextArtifact` struct).
+ */
 function renderContextArtifact(ctx: ContextArtifact): string {
   const conventions =
     ctx.conventions.length === 0
@@ -44,7 +52,6 @@ function renderContextArtifact(ctx: ContextArtifact): string {
   const interfaces =
     ctx.interfaces.length === 0 ? '- (none recorded)' : ctx.interfaces.map((i) => `- ${i}`).join('\n');
   return `## Repository Context Artifact (workflow-wide, frozen)
-Generated at: ${ctx.generatedAt}
 
 ### Overview
 ${ctx.overview || '(no overview captured)'}

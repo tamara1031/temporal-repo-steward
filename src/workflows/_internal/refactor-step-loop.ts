@@ -155,13 +155,23 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       step,
       priorFeedback: accumulatedFeedback,
     });
-    record.implementReports.push(implResult.report);
+    // Overwrite rather than accumulate: the report renderer reads only the
+    // final iter's report, so keeping every iteration's copy would waste
+    // workflow state (up to 16 KiB × maxIter per step). Replacing preserves
+    // the array shape so the renderer contract (`implementReports[length-1]`)
+    // stays valid without changes.
+    record.implementReports = [implResult.report];
 
-    // 2. Diff snapshot — fetch status (for drift detection) and diff text (for
-    //    no-progress comparison + parliament input) in parallel.
-    const [postImplStatus, postImplDiff] = await Promise.all([
+    // 2. Diff snapshot — fetch status, diff text, and diff stat in parallel.
+    //    All three are independent reads of the workdir at the same point in
+    //    time; running them concurrently saves one activity round-trip per iter.
+    //    - diffTextActivity: content diff for no-progress comparison + parliament
+    //    - statusPorcelainActivity: file-set for drift detection + no-progress
+    //    - diffStatActivity: line counts for the Pre-Parliament Gate
+    const [postImplStatus, postImplDiff, stat] = await Promise.all([
       cheap.statusPorcelainActivity({ workdir }),
       cheap.diffTextActivity({ workdir, maxBytes: reviewDiffBytes }),
+      cheap.diffStatActivity({ workdir }),
     ]);
     // No-progress detection: require BOTH the diff text AND the porcelain
     // file-set to be unchanged before calling it no-progress.
@@ -186,7 +196,6 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     lastPorcelainEntries = postImplStatus.entries;
 
     // 3. Pre-Parliament Gate (trivial diff → skip Parliament)
-    const stat = await cheap.diffStatActivity({ workdir });
     const isTrivial =
       stat.insertions + stat.deletions < trivialLineThreshold &&
       stat.filesChanged < trivialFileThreshold;

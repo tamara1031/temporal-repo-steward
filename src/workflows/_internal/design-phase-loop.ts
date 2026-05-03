@@ -17,8 +17,37 @@
 
 import { log } from '@temporalio/workflow';
 import { planCodex } from '../proxies';
-import type { ContextArtifact, DesignPhaseRecord, DesignRound, PlanOutput, PlanReviewConcern } from '../../activities/refactor';
+import type { ContextArtifact, DesignPhaseRecord, DesignRound, PlanOutput, PlanReviewConcern, PlanStep } from '../../activities/refactor';
 import type { SpawnCounter } from './spawn-budget';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Structural equality helpers for PlanOutput
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Field-by-field equality for `PlanOutput`. Used instead of
+ * `JSON.stringify(a) === JSON.stringify(b)` to avoid sensitivity to key
+ * insertion order (which V8 currently preserves but is not part of the spec).
+ */
+function stepsEqual(a: readonly PlanStep[], b: readonly PlanStep[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const sa = a[i];
+    const sb = b[i];
+    if (sa.title !== sb.title || sa.description !== sb.description) return false;
+    const ra = sa.critical_requirements;
+    const rb = sb.critical_requirements;
+    if (ra.length !== rb.length) return false;
+    for (let j = 0; j < ra.length; j++) {
+      if (ra[j] !== rb[j]) return false;
+    }
+  }
+  return true;
+}
+
+function plansEqual(a: PlanOutput, b: PlanOutput): boolean {
+  return a.theme === b.theme && a.rationale === b.rationale && stepsEqual(a.steps, b.steps);
+}
 
 export interface DesignPhaseConfig {
   /**
@@ -127,7 +156,7 @@ export async function runDesignPhase(input: DesignPhaseLoopInput): Promise<Desig
     }
     spawnCounter.consume('plan-refiner', 1);
 
-    const planBefore = JSON.stringify(plan);
+    const planBefore = plan;
     try {
       plan = await planCodex.refinePlanActivity({ workdir, contextArtifact, plan, feedback });
     } catch (err) {
@@ -136,7 +165,7 @@ export async function runDesignPhase(input: DesignPhaseLoopInput): Promise<Desig
       break;
     }
 
-    if (JSON.stringify(plan) === planBefore) {
+    if (plansEqual(planBefore, plan)) {
       log.info('plan refiner made no changes; accepting current plan', { iter });
       record.outcome = 'dropped-no-progress';
       break;

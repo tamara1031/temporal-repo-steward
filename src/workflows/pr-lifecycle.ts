@@ -426,11 +426,14 @@ async function collectFailedLogs(
   repoFullName: string,
   failedRunIds: readonly string[],
 ): Promise<string> {
-  const parts: string[] = [];
-  for (const runId of failedRunIds.slice(0, 3)) {
-    const part = await cheap.fetchFailedRunLogsActivity({ repoFullName, runId });
-    parts.push(`### Run ${runId}\n${part}`);
-  }
+  // Fetch up to 3 run logs in parallel — each is an independent gh API call.
+  const runIds = failedRunIds.slice(0, 3);
+  const parts = await Promise.all(
+    runIds.map(async (runId) => {
+      const part = await cheap.fetchFailedRunLogsActivity({ repoFullName, runId });
+      return `### Run ${runId}\n${part}`;
+    }),
+  );
   return parts.join('\n\n');
 }
 
