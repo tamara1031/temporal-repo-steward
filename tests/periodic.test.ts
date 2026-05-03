@@ -239,7 +239,7 @@ describe('periodicRefactorWorkflow', () => {
 
   it('downgrades critical_block to needs_revision when advisor returns retry', async () => {
     let correctnessCalls = 0;
-    let statusCalls = 0;
+    let diffCalls = 0;
     const { activities, calls } = makeMockActivities({
       reviewActivity: async (input: any) => {
         if (input.concern === 'correctness') {
@@ -255,12 +255,14 @@ describe('periodicRefactorWorkflow', () => {
         }
         return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
       },
-      // Vary porcelain output per call so iter 1's no-progress check
-      // (`arraysEqual(prev, current)`) sees real progress and proceeds to
-      // Parliament again.
-      statusPorcelainActivity: async () => {
-        statusCalls += 1;
-        return { entries: [` M src/foo${statusCalls}.ts`] };
+      // Vary diff text per call so iter 1's no-progress check sees real
+      // progress and proceeds to Parliament again.
+      diffTextActivity: async () => {
+        diffCalls += 1;
+        return {
+          text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
+          truncated: false,
+        };
       },
       // Advisor downgrades critical_block to needs_revision.
       consultAdvisorActivity: async () => ({
@@ -298,7 +300,7 @@ describe('periodicRefactorWorkflow', () => {
   });
   it('embeds advisor audit trail in the PR body', async () => {
     let correctnessCalls = 0;
-    let statusCalls = 0;
+    let diffCalls = 0;
     let capturedBody = '';
     const { activities } = makeMockActivities({
       reviewActivity: async (input: any) => {
@@ -314,9 +316,12 @@ describe('periodicRefactorWorkflow', () => {
         }
         return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
       },
-      statusPorcelainActivity: async () => {
-        statusCalls += 1;
-        return { entries: [` M src/foo${statusCalls}.ts`] };
+      diffTextActivity: async () => {
+        diffCalls += 1;
+        return {
+          text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
+          truncated: false,
+        };
       },
       consultAdvisorActivity: async () => ({
         verdict: 'retry' as const,

@@ -34,7 +34,7 @@ import type {
   PlanStep,
   ReviewConcern,
 } from '../../activities/refactor';
-import { arraysEqual, diffPorcelain } from './porcelain';
+import { diffPorcelain } from './porcelain';
 import { AdvisorBudget, consultAdvisor, type AdvisorAuditEntry } from './advisor';
 import type { StepRecord } from './refactor-report';
 import type { SpawnCounter } from './spawn-budget';
@@ -115,7 +115,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     driftReverts: [],
   };
   const accumulatedFeedback: string[] = [];
-  let lastDiffSnapshot: { entries: string[] } | undefined;
+  let lastDiffText: string | undefined;
 
   // Commit any accumulated prior-step changes as a checkpoint so that a full
   // restoreActivity({ workdir }) only undoes THIS step's work (HEAD = snapshot).
@@ -156,13 +156,13 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     });
     record.implementReports.push(implResult.report);
 
-    // 2. Diff snapshot — drift baseline + no-progress check
-    const postImplStatus = await cheap.statusPorcelainActivity({ workdir });
-    if (
-      iter > 0 &&
-      lastDiffSnapshot &&
-      arraysEqual(lastDiffSnapshot.entries, postImplStatus.entries)
-    ) {
+    // 2. Diff snapshot — fetch status (for drift detection) and diff text (for
+    //    no-progress comparison + parliament input) in parallel.
+    const [postImplStatus, postImplDiff] = await Promise.all([
+      cheap.statusPorcelainActivity({ workdir }),
+      cheap.diffTextActivity({ workdir, maxBytes: reviewDiffBytes }),
+    ]);
+    if (iter > 0 && lastDiffText !== undefined && lastDiffText === postImplDiff.text) {
       log.info('no progress between iterations; rolling back this step', {
         step: step.title,
       });
@@ -170,7 +170,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       record.outcome = 'dropped-no-progress';
       return { kind: 'completed', record };
     }
-    lastDiffSnapshot = postImplStatus;
+    lastDiffText = postImplDiff.text;
 
     // 3. Pre-Parliament Gate (trivial diff → skip Parliament)
     const stat = await cheap.diffStatActivity({ workdir });
@@ -201,7 +201,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       return { kind: 'budget-halted' };
     }
     spawnCounter.consume('reviewer', reviewerConcerns.length);
-    const diffText = await cheap.diffTextActivity({ workdir, maxBytes: reviewDiffBytes });
+    const diffText = postImplDiff; // already fetched above
     const reviews = await Promise.all(
       reviewerConcerns.map((concern) =>
         reviewCodex.reviewActivity({
