@@ -127,6 +127,30 @@ describe('robustPRMergeWorkflow', () => {
     expect((result as any).merged).toBe(false);
   });
 
+  it('preserves self-heal iteration count when CI loop sees PR closed externally', async () => {
+    let ciCalls = 0;
+    const { result } = await runWith('pr-closed-external-after-self-heal', {
+      waitForCIActivity: async () => {
+        ciCalls += 1;
+        if (ciCalls === 1) {
+          return {
+            status: 'failure' as const,
+            failedRunIds: ['12345'],
+            failedJobNames: ['lint'],
+          };
+        }
+        return {
+          status: 'closed' as const,
+          failedRunIds: [],
+          failedJobNames: [],
+        };
+      },
+    });
+    expect((result as any).iterations).toBe(1);
+    expect((result as any).outcome).toBe('closed-externally');
+    expect((result as any).merged).toBe(false);
+  });
+
   it('returns merged-externally when CI loop observes external merge', async () => {
     const { result } = await runWith('pr-merged-external', {
       waitForCIActivity: async () => ({
@@ -135,6 +159,30 @@ describe('robustPRMergeWorkflow', () => {
         failedJobNames: [],
       }),
     });
+    expect((result as any).outcome).toBe('merged-externally');
+    expect((result as any).merged).toBe(true);
+  });
+
+  it('preserves self-heal iteration count when CI loop observes external merge', async () => {
+    let ciCalls = 0;
+    const { result } = await runWith('pr-merged-external-after-self-heal', {
+      waitForCIActivity: async () => {
+        ciCalls += 1;
+        if (ciCalls === 1) {
+          return {
+            status: 'failure' as const,
+            failedRunIds: ['12345'],
+            failedJobNames: ['lint'],
+          };
+        }
+        return {
+          status: 'merged' as const,
+          failedRunIds: [],
+          failedJobNames: [],
+        };
+      },
+    });
+    expect((result as any).iterations).toBe(1);
     expect((result as any).outcome).toBe('merged-externally');
     expect((result as any).merged).toBe(true);
   });

@@ -132,7 +132,7 @@ export async function robustPRMergeWorkflow(
   while (iter < maxIters) {
     const ci = await waitForCI(pr.number, input.repoFullName);
 
-    const externalExit = handleExternalExit(ci, finalize);
+    const externalExit = handleExternalExit(ci, iter, finalize);
     if (externalExit) return externalExit;
 
     if (ci.status === 'failure') {
@@ -239,6 +239,7 @@ async function waitForCI(prNumber: number, repoFullName: string): Promise<CIResu
  */
 function handleExternalExit(
   ci: CIResult,
+  iter: number,
   finalize: (
     iters: number,
     merged: boolean,
@@ -253,11 +254,11 @@ function handleExternalExit(
   }
   if (ci.status === 'closed') {
     log.info('PR was closed externally; abandoning workflow');
-    return finalize(0, false, 'closed-externally');
+    return finalize(iter, false, 'closed-externally');
   }
   if (ci.status === 'merged') {
     log.info('PR was merged externally; treating as success');
-    return finalize(0, true, 'merged-externally');
+    return finalize(iter, true, 'merged-externally');
   }
   return undefined;
 }
@@ -467,4 +468,3 @@ async function pollUntilMerged(
   log.info('PR still queued after merge request; reporting merge-queued', { prNumber });
   return 'merge-queued';
 }
-
