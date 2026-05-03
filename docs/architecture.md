@@ -132,67 +132,68 @@ flowchart TB
 ### `periodicRefactorWorkflow`
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant W as periodicRefactorWorkflow
-    participant Heavy as heavy proxy
-    participant Cheap as cheap proxy
-    participant Codex as codex proxies<br/>(context / plan / implement / review)
-    participant Child as robustPRMergeWorkflow
+flowchart TD
+    Start([start]) --> Clone[cloneRepoActivity<br/>heavy]
+    Clone --> Ctx[extractContextArtifactActivity<br/>contextCodex]
+    Ctx --> Plan[planActivity<br/>planCodex]
+    Plan --> NoOp{theme == 'no-op'<br/>or steps == ∅?}
+    NoOp -->|yes| RetNoOp([return<br/>skipped: 'no-op-plan']):::ret
+    NoOp -->|no| Cap[steps = plan.steps<br/>.slice 0, MAX_STEPS=2]
+    Cap --> StepLoop{{for each step}}
 
-    W->>Heavy: cloneRepoActivity
-    W->>Codex: extractContextArtifactActivity (Phase 0)
-    Note right of Codex: spawn 1: context
+    StepLoop --> IterLoop{{iter 0..MAX_ITER-1<br/>= 0..1}}
+    IterLoop --> BudgetImpl{spawnCounter<br/>can consume 1?}
+    BudgetImpl -->|no| BreakSteps[/break stepLoop/]
+    BudgetImpl -->|yes| Impl[implementActivity<br/>implementCodex]
+    Impl --> Snap[statusPorcelainActivity<br/>cheap]
+    Snap --> Progress{iter &gt; 0 AND<br/>same as last snap?}
+    Progress -->|yes| RestoreStep[restoreActivity<br/>step files]
+    RestoreStep --> MarkDrop[mark<br/>dropped-no-progress]
+    MarkDrop --> NextStep[/continue stepLoop/]
 
-    W->>Codex: planActivity(contextArtifact, brief?)
-    Note right of Codex: spawn 2: planner
-    Codex-->>W: PlanOutput {theme, steps[≤2]}
+    Progress -->|no| Stat[diffStatActivity<br/>cheap]
+    Stat --> Trivial{ins+del &lt; 30<br/>AND files &lt; 3?}
+    Trivial -->|yes| MarkSkip[mark<br/>parliament-skipped]
+    MarkSkip --> NextStep
 
-    alt theme == "no-op" or no steps
-        W-->>W: return {skipped: 'no-op-plan'}
-    end
+    Trivial -->|no| BudgetRev{remaining<br/>≥ 2?}
+    BudgetRev -->|no| BreakSteps
+    BudgetRev -->|yes| DiffText[diffTextActivity<br/>cheap, ≤8 KiB]
+    DiffText --> Review[Promise.all -<br/>reviewActivity correctness +<br/>reviewActivity quality<br/>reviewCodex]
+    Review --> DriftSnap[statusPorcelainActivity<br/>drift audit, cheap]
+    DriftSnap --> Drift{drift detected?}
+    Drift -->|yes| RestoreDrift[restoreActivity<br/>drifted files]
+    Drift -->|no| Aggregate
+    RestoreDrift --> Aggregate{verdict?}
 
-    loop for each step (≤ MAX_STEPS = 2)
-        loop iter 0..MAX_ITER-1 (= 2)
-            W->>Codex: implementActivity(ctx, step, priorFeedback)
-            W->>Cheap: statusPorcelainActivity
-            alt iter > 0 AND no progress
-                W->>Cheap: restoreActivity(stepFiles)
-                Note right of W: dropped-no-progress, break
-            end
-            W->>Cheap: diffStatActivity
-            alt insertions+deletions < 30 AND files < 3
-                Note right of W: parliament-skipped, break
-            end
-            W->>Cheap: diffTextActivity (≤ 8 KiB)
-            par parallel reviewers
-                W->>Codex: reviewActivity(concern='correctness')
-            and
-                W->>Codex: reviewActivity(concern='quality')
-            end
-            W->>Cheap: statusPorcelainActivity (drift audit)
-            alt drift detected
-                W->>Cheap: restoreActivity(driftedFiles)
-            end
-            alt any reviewer = critical_block
-                W->>Cheap: restoreActivity (full restore)
-                Note right of W: rolled-back-critical-block,<br/>break ALL steps
-            else all reviewers ok
-                Note right of W: converged, next step
-            else
-                Note right of W: append feedback,<br/>iter++
-            end
-        end
-    end
+    Aggregate -->|any critical_block| RestoreAll[restoreActivity<br/>full restore]
+    RestoreAll --> MarkBlock[mark<br/>rolled-back-critical-block]
+    MarkBlock --> BreakSteps
+    Aggregate -->|all ok| MarkConv[mark converged]
+    MarkConv --> NextStep
+    Aggregate -->|needs_revision| AppendFb[append blocking_issues<br/>+ suggestions to feedback]
+    AppendFb --> IterEnd{iter == MAX_ITER-1?}
+    IterEnd -->|no| IterLoop
+    IterEnd -->|yes| MarkUnConv[mark<br/>dropped-not-converged<br/>restore step files]
+    MarkUnConv --> NextStep
 
-    W->>Cheap: statusPorcelainActivity
-    alt no working-tree changes
-        W-->>W: return {skipped: 'no-changes'}
-    end
-    W->>Heavy: commitAllActivity
-    W->>Child: executeChild(robustPRMergeWorkflow)
-    Child-->>W: {prUrl, prNumber, merged}
-    W->>Cheap: cleanupWorkspaceActivity (finally)
+    NextStep --> StepLoop
+    StepLoop -->|all steps done| FinalStatus[statusPorcelainActivity<br/>cheap]
+    BreakSteps --> FinalStatus
+    FinalStatus --> AnyChanges{entries == ∅?}
+    AnyChanges -->|yes| RetNoChg([return<br/>skipped: 'no-changes']):::ret
+    AnyChanges -->|no| Commit[commitAllActivity<br/>heavy]
+    Commit --> Child[executeChild<br/>robustPRMergeWorkflow<br/>parentClosePolicy=ABANDON]
+    Child --> RetOk([return prUrl /<br/>prNumber / merged]):::ret
+
+    RetNoOp -.->|finally| Cleanup
+    RetNoChg -.->|finally| Cleanup
+    RetOk -.->|finally| Cleanup
+    BreakSteps -.->|finally| Cleanup
+    Cleanup[cleanupWorkspaceActivity<br/>cheap, CancellationScope.nonCancellable]:::finally
+
+    classDef ret fill:#dff,stroke:#06a,color:#024
+    classDef finally fill:#fee,stroke:#a00,color:#400
 ```
 
 #### Spawn budget
