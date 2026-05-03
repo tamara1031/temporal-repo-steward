@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyCheck,
   decideCIStatus,
+  evaluateStabilization,
   extractRunId,
   parseStatusCheckRollupJSON,
   type RollupCheck,
+  type RollupSnapshot,
 } from '../src/activities/github/_internal/ci-rollup';
 
 describe('github CI helpers', () => {
@@ -179,6 +181,148 @@ describe('github CI helpers', () => {
   it('extracts run ids from action URLs only', () => {
     expect(extractRunId('https://github.com/example/repo/actions/runs/123/job/456')).toBe('123');
     expect(extractRunId('https://ci.example.com/build/123')).toBeUndefined();
+  });
+});
+
+describe('evaluateStabilization', () => {
+  const checks = (...entries: RollupCheck[]): RollupCheck[] => entries;
+
+  it('starts a fresh window on the first observation', () => {
+    const out = evaluateStabilization(
+      undefined,
+      checks({ name: 'lint', conclusion: 'SUCCESS' }),
+      1_000,
+      60_000,
+    );
+    expect(out.kind).toBe('wait');
+    if (out.kind === 'wait') {
+      expect(out.next.firstObservedAt).toBe(1_000);
+      expect(out.next.signature).toEqual(['lint\0SUCCESS']);
+    }
+  });
+
+  it('keeps waiting while elapsed time is below the threshold', () => {
+    const prev: RollupSnapshot = {
+      signature: ['lint\0SUCCESS'],
+      firstObservedAt: 1_000,
+    };
+    const out = evaluateStabilization(
+      prev,
+      checks({ name: 'lint', conclusion: 'SUCCESS' }),
+      30_000,
+      60_000,
+    );
+    expect(out).toEqual({ kind: 'wait', next: prev });
+  });
+
+  it('settles once the same signature has held for the full window', () => {
+    const prev: RollupSnapshot = {
+      signature: ['lint\0SUCCESS'],
+      firstObservedAt: 1_000,
+    };
+    const out = evaluateStabilization(
+      prev,
+      checks({ name: 'lint', conclusion: 'SUCCESS' }),
+      61_000,
+      60_000,
+    );
+    expect(out).toEqual({ kind: 'settle' });
+  });
+
+  it('resets the window when a new check appears mid-stabilization (the registration race)', () => {
+    const prev: RollupSnapshot = {
+      signature: ['lint\0SUCCESS'],
+      firstObservedAt: 1_000,
+    };
+    const out = evaluateStabilization(
+      prev,
+      checks(
+        { name: 'lint', conclusion: 'SUCCESS' },
+        { name: 'test', conclusion: 'SUCCESS' },
+      ),
+      50_000,
+      60_000,
+    );
+    expect(out.kind).toBe('wait');
+    if (out.kind === 'wait') {
+      expect(out.next.firstObservedAt).toBe(50_000);
+      expect(out.next.signature).toEqual([
+        'lint\0SUCCESS',
+        'test\0SUCCESS',
+      ]);
+    }
+  });
+
+  it('resets the window when the same job name flips conclusion (e.g. re-run)', () => {
+    const prev: RollupSnapshot = {
+      signature: ['lint\0SUCCESS'],
+      firstObservedAt: 1_000,
+    };
+    // Same name but a re-run dropped it back to IN_PROGRESS — `decideCIStatus`
+    // would actually flip the overall decision to `pending` here, but the
+    // stabilization helper must still treat the signature as changed so that
+    // a hypothetical "same name, different terminal verdict" (e.g.
+    // `SUCCESS → NEUTRAL`) also restarts the window.
+    const out = evaluateStabilization(
+      prev,
+      checks({ name: 'lint', conclusion: 'NEUTRAL' }),
+      50_000,
+      60_000,
+    );
+    expect(out.kind).toBe('wait');
+    if (out.kind === 'wait') {
+      expect(out.next.firstObservedAt).toBe(50_000);
+      expect(out.next.signature).toEqual(['lint\0NEUTRAL']);
+    }
+  });
+
+  it('treats check ordering as irrelevant — only the sorted set matters', () => {
+    const prev = evaluateStabilization(
+      undefined,
+      checks(
+        { name: 'lint', conclusion: 'SUCCESS' },
+        { name: 'test', conclusion: 'SUCCESS' },
+      ),
+      1_000,
+      60_000,
+    );
+    expect(prev.kind).toBe('wait');
+    const next = evaluateStabilization(
+      prev.kind === 'wait' ? prev.next : undefined,
+      checks(
+        { name: 'test', conclusion: 'SUCCESS' },
+        { name: 'lint', conclusion: 'SUCCESS' },
+      ),
+      61_000,
+      60_000,
+    );
+    expect(next).toEqual({ kind: 'settle' });
+  });
+
+  it('handles the "no checks configured" rollup like any other signature', () => {
+    const first = evaluateStabilization(undefined, [], 1_000, 60_000);
+    expect(first.kind).toBe('wait');
+    const second = evaluateStabilization(
+      first.kind === 'wait' ? first.next : undefined,
+      [],
+      61_000,
+      60_000,
+    );
+    expect(second).toEqual({ kind: 'settle' });
+  });
+
+  it('pins the failure-asymmetry contract — failures must short-circuit, never stabilize', () => {
+    // Implementation contract: callers must check `decideCIStatus(...).status`
+    // before invoking `evaluateStabilization`. A failed rollup never reaches
+    // here. We assert that contract by showing decideCIStatus would already
+    // return `failure` for these inputs — so wait-for-ci's branch order
+    // (failure → return immediately; success → stabilize) stays correct.
+    expect(
+      decideCIStatus([
+        { name: 'lint', conclusion: 'SUCCESS' },
+        { name: 'test', conclusion: 'FAILURE' },
+      ]).status,
+    ).toBe('failure');
   });
 });
 
