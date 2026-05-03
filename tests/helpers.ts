@@ -66,10 +66,18 @@ export function makeMockActivities(
     })),
     fetchFailedRunLogsActivity: record('fetchFailedRunLogsActivity', async () => 'log lines'),
     mergePRActivity: record('mergePRActivity', async () => undefined),
-    observePRStateActivity: record('observePRStateActivity', async () => ({
-      state: 'MERGED' as const,
-      mergedAt: '2026-05-03T00:00:00.000Z',
-    })),
+    // Default mocks the realistic lifecycle: pre-merge call sees OPEN (the
+    // workflow proceeds to call `mergePRActivity`); subsequent calls (the
+    // post-merge poll) see MERGED. Tests that need a different shape pass an
+    // override via `makeMockActivities({ observePRStateActivity: ... })`.
+    observePRStateActivity: (() => {
+      let observeCalls = 0;
+      return record('observePRStateActivity', async () => {
+        observeCalls += 1;
+        if (observeCalls === 1) return { state: 'OPEN' as const };
+        return { state: 'MERGED' as const, mergedAt: '2026-05-03T00:00:00.000Z' };
+      });
+    })(),
     // Generic codex activity — used by pr-lifecycle for CI self-heal and
     // merge-conflict resolution. The refactor pipeline does NOT route through
     // this; it uses the role-specific activities below.

@@ -7,7 +7,6 @@ import {
   ParentClosePolicy,
 } from '@temporalio/workflow';
 import {
-  advisor,
   cheap,
   heavy,
   contextCodex,
@@ -24,6 +23,11 @@ import type {
   ReviewConcern,
 } from '../activities/refactor';
 import { arraysEqual, diffPorcelain, filesFromPorcelain } from './_internal/porcelain';
+import {
+  AdvisorBudget,
+  consultAdvisor,
+  type AdvisorAuditEntry,
+} from './_internal/advisor';
 
 export interface PeriodicRefactorInput {
   repoFullName: string;
@@ -54,6 +58,12 @@ export interface PeriodicRefactorOutput {
     | 'auto-merge-disabled'
     | 'closed-externally'
     | 'merged-externally';
+  /**
+   * Combined advisor audit trail (this workflow + child). The PR body
+   * already lists the periodic-side consults; the child's are appended here
+   * because they happen *after* PR body rendering.
+   */
+  advisorAudits?: AdvisorAuditEntry[];
   skipped?: 'no-changes' | 'no-op-plan' | 'plan-failed';
 }
 
@@ -123,7 +133,8 @@ export async function periodicRefactorWorkflow(
   });
   const workdir = clone.workdir;
   const spawnCounter = new SpawnCounter(MAX_SPAWNS);
-  const advisorBudget = new SimpleBudget(input.maxAdvisorConsults ?? 1);
+  const advisorBudget = new AdvisorBudget(input.maxAdvisorConsults ?? 1);
+  const advisorAudits: AdvisorAuditEntry[] = [];
 
   try {
     // ── Phase 0. Context Artifact ────────────────────────────────────────
@@ -278,17 +289,28 @@ export async function periodicRefactorWorkflow(
           ].slice(0, 3);
 
           // Optional advisor consult: critical_block is a hard rollback by
-          // default, but a single reviewer can be over-cautious. The advisor
-          // gets a tight summary; only `abort` keeps the rollback. `retry`
-          // downgrades to needs_revision (loop with feedback).
-          const advisorVerdict = await maybeConsultOnCriticalBlock({
+          // default, but a single reviewer can be over-cautious. Only `retry`
+          // from the advisor downgrades to needs_revision (loop with feedback);
+          // anything else (or no consult — budget exhausted, advisor failed)
+          // keeps the rollback. Note: with the default budget=1, only the
+          // first critical_block per workflow gets a consult.
+          const { reply, audit } = await consultAdvisor(advisorBudget, 'critical-block', {
             workdir,
-            advisorBudget,
-            step,
-            concern: blockerConcern,
-            bullets: blockerBullets,
+            situation: `Reviewer (${blockerConcern}) issued critical_block on step "${step.title}". Default action is full rollback.`,
+            summary: [
+              `Step: ${step.title}`,
+              `Reviewer concern: ${blockerConcern}`,
+              `Reviewer's top issues:`,
+              ...blockerBullets.slice(0, 3).map((b) => `- ${b}`),
+            ].join('\n'),
+            options: [
+              'retry — reviewer is over-cautious; downgrade to needs_revision and let the implementer try again',
+              'abort — issue is genuinely critical; keep the rollback and surface to a human',
+              'change-strategy — keep the rollback but record the suggested next direction',
+            ],
           });
-          if (advisorVerdict === 'retry') {
+          advisorAudits.push(audit);
+          if (reply?.verdict === 'retry') {
             log.info('advisor downgraded critical_block to needs_revision', {
               step: step.title,
               concern: blockerConcern,
@@ -365,6 +387,7 @@ export async function periodicRefactorWorkflow(
       circuitBroken,
       spawnSummary: spawnCounter.summary(),
       branch,
+      advisorAudits,
     });
 
     await heavy.commitAllActivity({
@@ -398,6 +421,7 @@ export async function periodicRefactorWorkflow(
       prNumber: prResult.prNumber,
       merged: prResult.merged,
       prOutcome: prResult.outcome,
+      advisorAudits: [...advisorAudits, ...(prResult.advisorAudits ?? [])],
     };
   } finally {
     // Cleanup must run even when the workflow is cancelled — otherwise the
@@ -417,73 +441,6 @@ export async function periodicRefactorWorkflow(
 // ──────────────────────────────────────────────────────────────────────────
 // Internal helpers — pure, deterministic, safe inside a workflow.
 // ──────────────────────────────────────────────────────────────────────────
-
-interface CriticalBlockContext {
-  workdir: string;
-  advisorBudget: SimpleBudget;
-  step: PlanStep;
-  concern: ReviewConcern;
-  bullets: string[];
-}
-
-/**
- * Consult the advisor when a Parliament reviewer issues `critical_block`. The
- * default workflow behavior is "rollback everything"; a `retry` verdict lets
- * the advisor downgrade that to `needs_revision` so the implementer gets
- * another iteration with the reviewer's feedback. Returns `'continue'` when
- * no advisor was consulted (budget exhausted, advisor failed, or verdict
- * was abort/change-strategy) — caller should keep the rollback in that case.
- */
-async function maybeConsultOnCriticalBlock(
-  ctx: CriticalBlockContext,
-): Promise<'continue' | 'retry'> {
-  if (!ctx.advisorBudget.canConsume()) return 'continue';
-  ctx.advisorBudget.consume();
-
-  const summary = [
-    `Step: ${ctx.step.title}`,
-    `Reviewer concern: ${ctx.concern}`,
-    `Reviewer's top issues:`,
-    ...ctx.bullets.slice(0, 3).map((b) => `- ${b}`),
-  ].join('\n');
-
-  try {
-    const reply = await advisor.consultAdvisorActivity({
-      workdir: ctx.workdir,
-      situation: `Reviewer (${ctx.concern}) issued critical_block on step "${ctx.step.title}". Default action is full rollback.`,
-      summary,
-      options: [
-        'retry — reviewer is over-cautious; downgrade to needs_revision and let the implementer try again',
-        'abort — issue is genuinely critical; keep the rollback and surface to a human',
-        'change-strategy — keep the rollback but record the suggested next direction',
-      ],
-    });
-    log.info('advisor verdict on critical_block', {
-      step: ctx.step.title,
-      concern: ctx.concern,
-      verdict: reply.verdict,
-      rationale: reply.rationale,
-      suggestedAction: reply.suggestedAction,
-    });
-    return reply.verdict === 'retry' ? 'retry' : 'continue';
-  } catch (err) {
-    log.warn('advisor consult on critical_block failed; keeping rollback', {
-      err: String(err),
-    });
-    return 'continue';
-  }
-}
-
-class SimpleBudget {
-  private consumed = 0;
-  constructor(private readonly cap: number) {}
-  canConsume(): boolean {
-    return this.consumed < this.cap;
-  }
-  consume(): void {
-    this.consumed += 1;
-  }
-}
 
 class SpawnCounter {
   private readonly counts: Record<string, number> = {};
@@ -511,6 +468,7 @@ interface ReportInput {
   circuitBroken?: { step: PlanStep; concern: ReviewConcern; bullets: string[] };
   spawnSummary: { total: number; cap: number; perRole: Record<string, number> };
   branch: string;
+  advisorAudits: AdvisorAuditEntry[];
 }
 
 function renderReport(r: ReportInput): string {
@@ -574,6 +532,29 @@ function renderReport(r: ReportInput): string {
     lines.push(`- ${role}: ${n}`);
   }
   lines.push('');
+  if (r.advisorAudits.length > 0) {
+    lines.push('## Advisor consults');
+    lines.push(
+      'The advisor (top-tier model) was consulted at the following decision gates. ' +
+        'Verdicts are advisory; the rollback / continue defaults still applied unless ' +
+        'the workflow comment notes otherwise.',
+    );
+    lines.push('');
+    for (const a of r.advisorAudits) {
+      lines.push(`### Gate: \`${a.gate}\``);
+      lines.push(`> ${a.situation}`);
+      if (a.reply) {
+        lines.push(`- **Verdict**: \`${a.reply.verdict}\``);
+        if (a.reply.rationale) lines.push(`- **Rationale**: ${a.reply.rationale}`);
+        if (a.reply.suggestedAction) lines.push(`- **Suggested action**: ${a.reply.suggestedAction}`);
+      } else if (a.error) {
+        lines.push(`- (advisor call failed: ${a.error.slice(0, 200)})`);
+      } else {
+        lines.push('- (advisor budget exhausted; default path taken)');
+      }
+      lines.push('');
+    }
+  }
   lines.push(`*Branch: \`${r.branch}\`. Generated by periodicRefactorWorkflow.*`);
   return lines.join('\n');
 }

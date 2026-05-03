@@ -1,11 +1,15 @@
 import { log, sleep, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
-import { advisor, cheap, heavy, heavyCodex, ciWait } from './proxies';
+import { cheap, heavy, heavyCodex, ciWait } from './proxies';
 import type {
-  AdvisorVerdict,
   CheckConflictOutput,
   CIResult,
   PRInfo,
 } from '../activities';
+import {
+  AdvisorBudget,
+  consultAdvisor,
+  type AdvisorAuditEntry,
+} from './_internal/advisor';
 
 export interface RobustPRMergeInput {
   repoFullName: string;
@@ -60,6 +64,8 @@ export interface RobustPRMergeOutput {
     | 'merged-externally';
   /** Number of advisor consults actually performed. */
   advisorConsults: number;
+  /** Audit trail of advisor consultations, surfaced for the operator. */
+  advisorAudits: AdvisorAuditEntry[];
 }
 
 const POST_MERGE_POLL_ATTEMPTS = 6;
@@ -88,6 +94,7 @@ export async function robustPRMergeWorkflow(
   const maxIters = input.maxFixIterations ?? 8;
   const autoMerge = input.autoMerge ?? true;
   const advisorBudget = new AdvisorBudget(input.maxAdvisorConsults ?? 2);
+  const advisorAudits: AdvisorAuditEntry[] = [];
   const info = workflowInfo();
 
   await heavy.pushBranchActivity({
@@ -107,11 +114,25 @@ export async function robustPRMergeWorkflow(
   });
   log.info('Opened PR', { pr: pr.url, workflowId: info.workflowId });
 
+  const finalize = (
+    iters: number,
+    merged: boolean,
+    outcome: RobustPRMergeOutput['outcome'],
+  ): RobustPRMergeOutput => ({
+    prNumber: pr.number,
+    prUrl: pr.url,
+    iterations: iters,
+    merged,
+    outcome,
+    advisorConsults: advisorBudget.used(),
+    advisorAudits,
+  });
+
   let iter = 0;
   while (iter < maxIters) {
     const ci = await waitForCI(pr.number, input.repoFullName);
 
-    const externalExit = handleExternalExit(ci, pr, advisorBudget);
+    const externalExit = handleExternalExit(ci, finalize);
     if (externalExit) return externalExit;
 
     if (ci.status === 'failure') {
@@ -122,14 +143,15 @@ export async function robustPRMergeWorkflow(
         input,
         advisorBudget,
       });
-      if (advice === 'abort') {
+      if (advice.audit) advisorAudits.push(advice.audit);
+      if (advice.shouldAbort) {
         throw ApplicationFailure.create({
           message: `Advisor recommended abort after CI iter ${iter} on PR #${pr.number}`,
           type: 'AdvisorAbort',
         });
       }
 
-      await runCISelfHeal({ iter, ci, input, advisorBudget });
+      await runCISelfHeal({ iter, ci, input, advisorBudget, audits: advisorAudits });
       continue;
     }
 
@@ -145,20 +167,32 @@ export async function robustPRMergeWorkflow(
         conflict,
         input,
         advisorBudget,
+        audits: advisorAudits,
       });
       continue;
     }
 
     if (!autoMerge) {
       log.info('autoMerge=false; skipping merge', { pr: pr.url, workflowId: info.workflowId });
-      return {
-        prNumber: pr.number,
-        prUrl: pr.url,
-        iterations: iter,
-        merged: false,
-        outcome: 'auto-merge-disabled',
-        advisorConsults: advisorBudget.used(),
-      };
+      return finalize(iter, false, 'auto-merge-disabled');
+    }
+
+    // Pre-merge state check: if another PR was merged + this one was already
+    // merged (or closed) in the gap between CI green and now, `gh pr merge
+    // --auto` would error. Cheaper to observe once and short-circuit.
+    const preState = await cheap.observePRStateActivity({
+      repoFullName: input.repoFullName,
+      prNumber: pr.number,
+    });
+    if (preState.state === 'MERGED') {
+      log.info('PR was already merged before merge request; treating as merged-externally', {
+        pr: pr.url,
+      });
+      return finalize(iter, true, 'merged-externally');
+    }
+    if (preState.state === 'CLOSED') {
+      log.info('PR was closed externally between CI green and merge request', { pr: pr.url });
+      return finalize(iter, false, 'closed-externally');
     }
 
     await cheap.mergePRActivity({
@@ -174,14 +208,7 @@ export async function robustPRMergeWorkflow(
       input.postMergePollAttempts ?? POST_MERGE_POLL_ATTEMPTS,
       input.postMergePollIntervalMs ?? POST_MERGE_POLL_INTERVAL_MS,
     );
-    return {
-      prNumber: pr.number,
-      prUrl: pr.url,
-      iterations: iter,
-      merged: observed === 'merged',
-      outcome: observed,
-      advisorConsults: advisorBudget.used(),
-    };
+    return finalize(iter, observed === 'merged', observed);
   }
 
   throw ApplicationFailure.create({
@@ -212,36 +239,25 @@ async function waitForCI(prNumber: number, repoFullName: string): Promise<CIResu
  */
 function handleExternalExit(
   ci: CIResult,
-  pr: PRInfo,
-  advisorBudget: AdvisorBudget,
+  finalize: (
+    iters: number,
+    merged: boolean,
+    outcome: RobustPRMergeOutput['outcome'],
+  ) => RobustPRMergeOutput,
 ): RobustPRMergeOutput | undefined {
   if (ci.status === 'timeout') {
     throw ApplicationFailure.create({
-      message: `CI did not converge within timeout for PR #${pr.number}`,
+      message: `CI did not converge within the max wait window`,
       type: 'CITimeout',
     });
   }
   if (ci.status === 'closed') {
-    log.info('PR was closed externally; abandoning workflow', { pr: pr.url });
-    return {
-      prNumber: pr.number,
-      prUrl: pr.url,
-      iterations: 0,
-      merged: false,
-      outcome: 'closed-externally',
-      advisorConsults: advisorBudget.used(),
-    };
+    log.info('PR was closed externally; abandoning workflow');
+    return finalize(0, false, 'closed-externally');
   }
   if (ci.status === 'merged') {
-    log.info('PR was merged externally; treating as success', { pr: pr.url });
-    return {
-      prNumber: pr.number,
-      prUrl: pr.url,
-      iterations: 0,
-      merged: true,
-      outcome: 'merged-externally',
-      advisorConsults: advisorBudget.used(),
-    };
+    log.info('PR was merged externally; treating as success');
+    return finalize(0, true, 'merged-externally');
   }
   return undefined;
 }
@@ -252,30 +268,22 @@ interface SelfHealContext {
   ci: CIResult;
   input: RobustPRMergeInput;
   advisorBudget: AdvisorBudget;
+  /** Accumulated audit trail; helpers append entries on consult. */
+  audits?: AdvisorAuditEntry[];
 }
 
 /**
  * Optionally consults the advisor BEFORE attempting another self-heal.
- * Triggers only when:
- *   - we're entering iter ≥ 2 (the first attempt deserves to run; the second
- *     is when "is this even fixable?" becomes worth asking), AND
- *   - the advisor budget has remaining capacity.
  *
- * Returns `'continue'` to proceed with self-heal, `'abort'` to stop, or
- * `'change-strategy'` to also proceed (the workflow doesn't have a third
- * branch yet — we surface the suggested action in logs and PR body, then
- * fall through to the normal self-heal). The verdict gating is intentionally
- * simple to keep the workflow's call graph small.
+ * Triggers only at iter ≥ 2 — the first attempt deserves to run; the second
+ * is when "is this even fixable?" is worth asking. Returns the raw verdict
+ * (or `undefined` if no consult happened) and the audit entry the caller
+ * should persist in the workflow audit trail.
  */
 async function maybeConsultBeforeSelfHeal(
   ctx: SelfHealContext,
-): Promise<'continue' | 'abort' | 'change-strategy'> {
-  if (ctx.iter < 2) return 'continue';
-  if (!ctx.advisorBudget.canConsume()) {
-    log.info('advisor budget exhausted; proceeding with self-heal', { iter: ctx.iter });
-    return 'continue';
-  }
-  ctx.advisorBudget.consume();
+): Promise<{ shouldAbort: boolean; audit?: AdvisorAuditEntry }> {
+  if (ctx.iter < 2) return { shouldAbort: false };
 
   const summary = [
     `Failed jobs: ${ctx.ci.failedJobNames.slice(0, 6).join(', ') || '(none reported)'}`,
@@ -283,34 +291,21 @@ async function maybeConsultBeforeSelfHeal(
     `Self-heal iteration about to start: ${ctx.iter}/${ctx.input.maxFixIterations ?? 8}`,
   ].join('\n');
 
-  let verdict: AdvisorVerdict;
-  let rationale = '';
-  let suggestedAction: string | undefined;
-  try {
-    const reply = await advisor.consultAdvisorActivity({
-      workdir: ctx.input.workdir,
-      situation: `CI is red on PR #${ctx.input.branch}; deciding whether to attempt self-heal again.`,
-      summary,
-      options: [
-        'retry — pattern looks transient or fixable with one more codex pass',
-        'abort — failure is structural; stop and surface to a human',
-        'change-strategy — try a different prompt or convert PR to draft for human review',
-      ],
-    });
-    verdict = reply.verdict;
-    rationale = reply.rationale;
-    suggestedAction = reply.suggestedAction;
-  } catch (err) {
-    log.warn('advisor consult failed; defaulting to continue', { err: String(err) });
-    return 'continue';
-  }
-  log.info('advisor verdict before self-heal', {
-    iter: ctx.iter,
-    verdict,
-    rationale,
-    suggestedAction,
+  const { reply, audit } = await consultAdvisor(ctx.advisorBudget, 'ci-self-heal', {
+    workdir: ctx.input.workdir,
+    situation: `CI is red on PR for branch ${ctx.input.branch}; deciding whether to attempt self-heal again.`,
+    summary,
+    options: [
+      'retry — pattern looks transient or fixable with one more codex pass',
+      'abort — failure is structural; stop and surface to a human',
+      'change-strategy — try a different prompt or convert PR to draft for human review',
+    ],
   });
-  return verdict === 'abort' ? 'abort' : 'continue';
+
+  return {
+    shouldAbort: reply?.verdict === 'abort',
+    audit,
+  };
 }
 
 async function runCISelfHeal(ctx: SelfHealContext): Promise<void> {
@@ -332,6 +327,7 @@ async function runCISelfHeal(ctx: SelfHealContext): Promise<void> {
     iter: ctx.iter,
     input: ctx.input,
     advisorBudget: ctx.advisorBudget,
+    audits: ctx.audits,
     commitMessage: `fix(ci): self-heal attempt ${ctx.iter}`,
     codexMessage: fix.message,
   });
@@ -342,6 +338,7 @@ interface ConflictResolveContext {
   conflict: CheckConflictOutput;
   input: RobustPRMergeInput;
   advisorBudget: AdvisorBudget;
+  audits?: AdvisorAuditEntry[];
 }
 
 async function runConflictResolve(ctx: ConflictResolveContext): Promise<void> {
@@ -364,6 +361,7 @@ async function runConflictResolve(ctx: ConflictResolveContext): Promise<void> {
     iter: ctx.iter,
     input: ctx.input,
     advisorBudget: ctx.advisorBudget,
+    audits: ctx.audits,
     commitMessage: `chore(merge): resolve conflicts attempt ${ctx.iter}`,
     codexMessage: resolve.message,
   });
@@ -373,6 +371,7 @@ interface CommitAndPushContext {
   iter: number;
   input: RobustPRMergeInput;
   advisorBudget: AdvisorBudget;
+  audits?: AdvisorAuditEntry[];
   commitMessage: string;
   codexMessage: string;
 }
@@ -402,29 +401,19 @@ async function commitAndPushOrEscalate(ctx: CommitAndPushContext): Promise<void>
 }
 
 async function escalateNoDiff(ctx: CommitAndPushContext): Promise<never> {
-  if (ctx.advisorBudget.canConsume()) {
-    ctx.advisorBudget.consume();
-    try {
-      const reply = await advisor.consultAdvisorActivity({
-        workdir: ctx.input.workdir,
-        situation: 'codex reported success but produced no diff during self-heal',
-        summary:
-          `Iter ${ctx.iter}. Codex final message (truncated):\n` +
-          ctx.codexMessage.slice(0, 1024),
-        options: [
-          'abort — codex misunderstands the failure; stop and request human review',
-          'change-strategy — close PR and re-open with a different prompt next run',
-        ],
-      });
-      log.warn('advisor on no-diff', {
-        verdict: reply.verdict,
-        rationale: reply.rationale,
-        suggestedAction: reply.suggestedAction,
-      });
-    } catch (err) {
-      log.warn('advisor consult on no-diff failed', { err: String(err) });
-    }
-  }
+  // Audit-only consult: the advisor's verdict is recorded for the operator
+  // but does not change the throw, because by this point no fix exists to
+  // push regardless of what the advisor recommends.
+  const { audit } = await consultAdvisor(ctx.advisorBudget, 'no-diff', {
+    workdir: ctx.input.workdir,
+    situation: 'codex reported success but produced no diff during self-heal',
+    summary: `Iter ${ctx.iter}. Codex final message (truncated):\n${ctx.codexMessage.slice(0, 1024)}`,
+    options: [
+      'abort — codex misunderstands the failure; stop and request human review',
+      'change-strategy — close PR and re-open with a different prompt next run',
+    ],
+  });
+  ctx.audits?.push(audit);
   throw ApplicationFailure.create({
     message: 'Codex reported success but produced no diff; cannot self-heal',
     type: 'NoFixDiff',
@@ -447,15 +436,22 @@ async function collectFailedLogs(
 /**
  * Poll for the actual merge to land. `gh pr merge --auto` only requests the
  * merge — when branch-protection requires "up to date", the merge can sit in
- * a queue. We poll a small number of times; if the PR has not entered MERGED
- * by then we report `merge-queued` rather than lying about success.
+ * a queue.
+ *
+ * Returns one of three outcomes (no thrown failures — every CLOSED/MERGED
+ * lifecycle state is a valid terminal):
+ *   - `merged`: MERGED observed (merge actually landed).
+ *   - `closed-externally`: CLOSED observed without merging (a human or the
+ *     merge queue closed the PR — operator visibility, not an error).
+ *   - `merge-queued`: still OPEN after the poll window — branch protection
+ *     is still gating the merge. Operator should check the GitHub UI.
  */
 async function pollUntilMerged(
   repoFullName: string,
   prNumber: number,
   attempts: number,
   intervalMs: number,
-): Promise<'merged' | 'merge-queued'> {
+): Promise<'merged' | 'merge-queued' | 'closed-externally'> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const observed = await cheap.observePRStateActivity({ repoFullName, prNumber });
     if (observed.state === 'MERGED') {
@@ -463,40 +459,12 @@ async function pollUntilMerged(
       return 'merged';
     }
     if (observed.state === 'CLOSED') {
-      // gh accepted --auto, but the PR is now closed without merging. Surface
-      // the surprise rather than report success.
-      throw ApplicationFailure.create({
-        message: `PR #${prNumber} was closed without merging after merge request was issued`,
-        type: 'MergeAbandoned',
-      });
+      log.info('PR closed externally during post-merge poll', { prNumber });
+      return 'closed-externally';
     }
     await sleep(intervalMs);
   }
   log.info('PR still queued after merge request; reporting merge-queued', { prNumber });
   return 'merge-queued';
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Workflow-side state — pure, deterministic, safe in workflow code.
-// ──────────────────────────────────────────────────────────────────────────
-
-/**
- * Hard cap on how many advisor (top-model) consults a single workflow run
- * may make. The advisor is intentionally rare; if every retry triggered one
- * the cost would balloon. The counter is workflow-local so it is naturally
- * deterministic across replays.
- */
-class AdvisorBudget {
-  private consumed = 0;
-  constructor(private readonly cap: number) {}
-  canConsume(): boolean {
-    return this.consumed < this.cap;
-  }
-  consume(): void {
-    this.consumed += 1;
-  }
-  used(): number {
-    return this.consumed;
-  }
 }
 

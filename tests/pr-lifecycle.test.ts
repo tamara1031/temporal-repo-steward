@@ -65,9 +65,40 @@ describe('robustPRMergeWorkflow', () => {
       'createPRActivity',
       'waitForCIActivity',
       'checkConflictActivity',
+      'observePRStateActivity', // pre-merge state check
       'mergePRActivity',
       'observePRStateActivity', // post-merge poll
     ]);
+  });
+
+  it('short-circuits to merged-externally when pre-merge observation sees MERGED', async () => {
+    const { result } = await runWith('pr-pre-merge-merged', {
+      observePRStateActivity: async () => ({
+        state: 'MERGED' as const,
+        mergedAt: '2026-05-03T00:00:00.000Z',
+      }),
+    });
+    expect((result as any).outcome).toBe('merged-externally');
+    expect((result as any).merged).toBe(true);
+  });
+
+  it('treats pollUntilMerged CLOSED as closed-externally (not a thrown failure)', async () => {
+    let observeCalls = 0;
+    const { result } = await runWith(
+      'pr-poll-closed',
+      {
+        observePRStateActivity: async () => {
+          observeCalls += 1;
+          // First call is the pre-merge gate — return OPEN to let the merge
+          // request proceed. Second call is the post-merge poll — return
+          // CLOSED to exercise the new clean-exit path.
+          return { state: observeCalls === 1 ? ('OPEN' as const) : ('CLOSED' as const) };
+        },
+      },
+      { postMergePollAttempts: 3, postMergePollIntervalMs: 1 },
+    );
+    expect((result as any).outcome).toBe('closed-externally');
+    expect((result as any).merged).toBe(false);
   });
 
   it('reports merge-queued when post-merge poll never sees MERGED', async () => {
@@ -80,7 +111,8 @@ describe('robustPRMergeWorkflow', () => {
     );
     expect((result as any).merged).toBe(false);
     expect((result as any).outcome).toBe('merge-queued');
-    expect(calls.log.filter((c) => c.name === 'observePRStateActivity').length).toBe(3);
+    // 1 pre-merge state check + 3 post-merge poll attempts.
+    expect(calls.log.filter((c) => c.name === 'observePRStateActivity').length).toBe(4);
   });
 
   it('returns closed-externally without throwing when CI loop sees PR closed', async () => {

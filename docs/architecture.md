@@ -209,15 +209,18 @@ flowchart TD
     AdviseNoDiff --> ThrowNoDiff([throw NoFixDiff])
     CommitH -->|committed=true| PushH[pushBranchActivity]
     PushH --> Wait
-    Conflict -->|noConflict| MergeReq[mergePRActivity<br/>--auto]
+    Conflict -->|noConflict| PreMerge["observePRStateActivity<br/>(pre-merge gate)"]
     Conflict -->|conflict| Resolve["heavyCodex.codexActivity<br/>(conflict resolve)"]
     Resolve --> CommitR[commitAllActivity]
     CommitR --> PushR[pushBranchActivity]
     PushR --> Wait
+    PreMerge -->|MERGED| MergedRace([return merged-externally]):::ret
+    PreMerge -->|CLOSED| ClosedRace([return closed-externally]):::ret
+    PreMerge -->|OPEN| MergeReq[mergePRActivity<br/>--auto]
     MergeReq --> Poll["pollUntilMerged<br/>(observePRStateActivity ×N)"]
     Poll -->|MERGED observed| RetMerged([return merged]):::ret
     Poll -->|exhausted polls| RetQueued([return merge-queued]):::ret
-    Poll -->|CLOSED after merge req| ThrowAbandon([throw MergeAbandoned])
+    Poll -->|CLOSED after merge req| RetClosedPoll([return closed-externally]):::ret
 
     classDef ret fill:#dff,stroke:#06a,color:#024
 ```
@@ -263,6 +266,68 @@ LLM 系 proxy は全て `codexQuotaFriendlyRetry` を共有し、429 / quota 系
 `RateLimited` 型として受けて指数バックオフで待つ (10 分上限・5 試行)。
 `PlannerOutputInvalid`, `MissingCredentials`, `InvalidGitRef` は
 `nonRetryableErrorTypes` に列挙して即失敗させる。
+
+---
+
+## Advisor consults（上位モデル相談）
+
+Advisor は **「迷ったときに上位モデルに薄く意見を聞く」** ための単一 Activity
+（`consultAdvisorActivity`）。実体は `codex exec --model $ADVISOR_MODEL --sandbox read-only`
+の薄いラッパーで、コードを書き換えることはない。ワークフローからは
+`workflows/_internal/advisor.ts` の `consultAdvisor()` ヘルパー経由で呼ぶ。
+
+### 起動条件（gate）
+
+| Gate | 場所 | 既定動作 | advisor の verdict が効く場面 |
+| --- | --- | --- | --- |
+| `ci-self-heal` | pr-lifecycle, iter ≥ 2 で CI red | self-heal を続行 | `abort` で workflow を停止（`AdvisorAbort`） |
+| `no-diff` | pr-lifecycle, codex が diff を出さなかった時 | `NoFixDiff` を throw | 監査記録のみ（throw は変えない） |
+| `critical-block` | periodic, reviewer が critical_block | 全 restore + 終了 | `retry` だけが効き、needs_revision に降格 |
+
+### I/O 契約
+
+入力（呼び出し側で集約済み・最大 ~2 KiB）:
+- `situation`: 1 行で「どの分岐点か」
+- `summary`: 失敗ジョブ名・上位 issue・iter 番号などの圧縮済みコンテキスト
+- `options`: workflow が選びうる候補（advisor がそれを参考にする）
+
+出力 JSON:
+```json
+{ "verdict": "retry" | "abort" | "change-strategy", "rationale": "...", "suggested_action": "..." }
+```
+
+### 予算（budget）
+
+| Workflow | 既定 cap | 上書き |
+| --- | --- | --- |
+| `robustPRMergeWorkflow` | `maxAdvisorConsults = 2` | 入力で増減可 |
+| `periodicRefactorWorkflow` | `maxAdvisorConsults = 1` | 0 で完全無効化 |
+
+`AdvisorBudget` は `_internal/advisor.ts` の workflow-local カウンタ。**activity を
+await する前に consume する** ため、activity が失敗してもカウントは消費される
+（指数的なリトライループを防ぐ意図）。
+
+### 失敗モード
+
+advisor の activity が `AdvisorOutputInvalid` を投げた / `RateLimited` リトライ
+が尽きた / 単に予算切れ — いずれの場合も `consultAdvisor()` は `reply: undefined`
+で audit エントリだけ返す。呼び出し側はそれを「相談しなかった」と等価に扱い、
+通常分岐（self-heal 続行 / 全 restore / NoFixDiff throw）にフォールスルーする。
+
+### 監査トレース
+
+各 consult は `AdvisorAuditEntry { gate, situation, reply?, error? }` として
+収集され、`PeriodicRefactorOutput.advisorAudits` および
+`RobustPRMergeOutput.advisorAudits` に出力される。periodic の `renderReport`
+は PR body に **「## Advisor consults」** セクションを生成し、verdict と
+rationale を可視化する。子 workflow（pr-lifecycle）の consult は時系列上
+PR body 生成より後なので、PR body には載らず periodic 出力経由で観測する。
+
+### 環境変数
+
+`ADVISOR_MODEL` を Worker に設定すると codex がそのモデルで起動する。
+未設定なら codex のデフォルトモデルが使われ、advisor は事実上「同モデルでの
+2nd opinion」として動く。本番では Opus / GPT-5 級のモデルを推奨。
 
 ---
 

@@ -296,9 +296,71 @@ describe('periodicRefactorWorkflow', () => {
     );
     expect(fullRestores.length).toBe(0);
   });
+  it('embeds advisor audit trail in the PR body', async () => {
+    let correctnessCalls = 0;
+    let statusCalls = 0;
+    let capturedBody = '';
+    const { activities } = makeMockActivities({
+      reviewActivity: async (input: any) => {
+        if (input.concern === 'correctness') {
+          correctnessCalls += 1;
+          if (correctnessCalls === 1) {
+            return {
+              verdict: 'critical_block' as const,
+              blocking_issues: ['over-cautious flag'],
+              suggestions: [],
+            };
+          }
+        }
+        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+      },
+      statusPorcelainActivity: async () => {
+        statusCalls += 1;
+        return { entries: [` M src/foo${statusCalls}.ts`] };
+      },
+      consultAdvisorActivity: async () => ({
+        verdict: 'retry' as const,
+        rationale: 'looks over-cautious; one more pass should land it',
+        suggestedAction: 'add the suggested guard and retry',
+      }),
+      createPRActivity: async (input: any) => {
+        capturedBody = input.body;
+        return {
+          number: 42,
+          url: 'https://github.com/example/repo/pull/42',
+          branch: input.branch,
+          baseBranch: input.baseBranch,
+          repoFullName: input.repoFullName,
+        };
+      },
+    });
+
+    const taskQueue = 'periodic-test-advisor-body';
+    const worker = await Worker.create({
+      connection: env.nativeConnection,
+      taskQueue,
+      workflowBundle: await getWorkflowBundle(),
+      activities,
+    });
+
+    await worker.runUntil(
+      env.client.workflow.execute(periodicRefactorWorkflow, {
+        taskQueue,
+        workflowId: `periodic-advisor-body-${randomUUID()}`,
+        args: [{ repoFullName: 'example/repo' }],
+      }),
+    );
+
+    expect(capturedBody).toContain('## Advisor consults');
+    expect(capturedBody).toContain('Gate: `critical-block`');
+    expect(capturedBody).toContain('**Verdict**: `retry`');
+    expect(capturedBody).toContain('looks over-cautious');
+    expect(capturedBody).toContain('add the suggested guard and retry');
+  });
+
   it('sanitizes branch names when workflowId contains colons (e.g. from schedules)', async () => {
     let capturedBranch = '';
-    const { activities, calls } = makeMockActivities({
+    const { activities } = makeMockActivities({
       cloneRepoActivity: async (input: any) => {
         capturedBranch = input.branch;
         return { workdir: '/tmp/workdir', branch: input.branch, baseSha: 'sha' };
