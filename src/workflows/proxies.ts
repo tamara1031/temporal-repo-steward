@@ -1,13 +1,7 @@
 import { proxyActivities } from '@temporalio/workflow';
 import type { RetryPolicy } from '@temporalio/common';
 import type * as activities from '../activities';
-
-/**
- * Errors that should NEVER be retried regardless of which proxy is invoked.
- * Note: `RateLimited` is intentionally NOT here — quota errors are the
- * "operational waiting state" the LLM proxies are tuned for.
- */
-const NON_RETRYABLE = ['MissingCredentials', 'InvalidGitRef', 'PlannerOutputInvalid'] as const;
+import { PROXY_NON_RETRYABLE, ADVISOR_PROXY_NON_RETRYABLE } from '../errors';
 
 /** Short, idempotent calls (gh read-only, git plumbing, status updates). */
 export const cheap = proxyActivities<typeof activities>({
@@ -17,7 +11,7 @@ export const cheap = proxyActivities<typeof activities>({
     backoffCoefficient: 2,
     maximumInterval: '30s',
     maximumAttempts: 5,
-    nonRetryableErrorTypes: [...NON_RETRYABLE],
+    nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
   },
 });
 
@@ -29,7 +23,7 @@ export const heavy = proxyActivities<typeof activities>({
     backoffCoefficient: 2,
     maximumInterval: '5 minutes',
     maximumAttempts: 4,
-    nonRetryableErrorTypes: [...NON_RETRYABLE],
+    nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
   },
 });
 
@@ -50,7 +44,7 @@ const codexQuotaFriendlyRetry: RetryPolicy = {
   backoffCoefficient: 3,
   maximumInterval: '10 minutes',
   maximumAttempts: 5,
-  nonRetryableErrorTypes: [...NON_RETRYABLE],
+  nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
 };
 
 /**
@@ -112,7 +106,7 @@ export const advisor = proxyActivities<typeof activities>({
     backoffCoefficient: 2,
     maximumInterval: '2 minutes',
     maximumAttempts: 3,
-    nonRetryableErrorTypes: [...NON_RETRYABLE, 'AdvisorOutputInvalid'],
+    nonRetryableErrorTypes: [...ADVISOR_PROXY_NON_RETRYABLE],
   },
 });
 
@@ -125,6 +119,6 @@ export const ciWait = proxyActivities<typeof activities>({
     backoffCoefficient: 2,
     maximumInterval: '2 minutes',
     maximumAttempts: 3,
-    nonRetryableErrorTypes: [...NON_RETRYABLE],
+    nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
   },
 });
