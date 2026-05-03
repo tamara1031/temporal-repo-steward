@@ -11,13 +11,13 @@ flowchart LR
         direction TB
         Periodic
         Robust
-        Activities["Activities<br/>(git / github / codex / refactor)"]
+        Activities["Activities<br/>(advisor / codex / git / github / refactor)"]
     end
 
     Periodic -.->|"poll<br/>task queue"| Activities
     Robust -.->|"poll<br/>task queue"| Activities
 
-    Activities -->|gh CLI / git / codex| External[(GitHub<br/>+ codex API)]
+    Activities -->|gh CLI / git / codex / advisor codex| External[(GitHub<br/>+ codex API)]
 ```
 
 > 現在の実装は定期リファクタリング 1 本に絞っており、コード生成側は codex のみ。
@@ -93,7 +93,11 @@ src/activities/
 flowchart TB
     subgraph shared["_internal (cluster-wide)"]
         Exec[exec.ts<br/>execCommand / execOrThrow]
-        RunCodex[run-codex.ts<br/>runCodexExec + 429 detector]
+        RunCodex["run-codex.ts<br/>runCodexExec<br/>(--sandbox 切替 + 429 検知)"]
+    end
+
+    subgraph advisor_cluster["advisor/"]
+        AdvAct["consultAdvisorActivity<br/>(read-only sandbox)"]
     end
 
     subgraph codex_cluster["codex/"]
@@ -107,7 +111,7 @@ flowchart TB
 
     subgraph github_cluster["github/"]
         GhInternals["_internal<br/>(gh-env / gh-json /<br/>ci-rollup / pr-view)"]
-        GhActs["create-pr / wait-for-ci /<br/>fetch-failed-logs / merge-pr"]
+        GhActs["create-pr / wait-for-ci /<br/>fetch-failed-logs / merge-pr /<br/>observe-pr-state"]
     end
 
     subgraph refactor_cluster["refactor/"]
@@ -123,6 +127,7 @@ flowchart TB
     RefActs --> RunCodex
     CodexAct --> RunCodex
     CodexAct --> Exec
+    AdvAct --> RunCodex
     RunCodex --> Exec
     GitEnv --> Exec
 ```
@@ -156,7 +161,9 @@ flowchart TD
         Review --> Verdict{verdict}
         Verdict -->|all ok| StepDone
         Verdict -->|needs_revision| Impl
-        Verdict -->|critical_block| RBall[full restore]
+        Verdict -->|critical_block| AdviseCB{"consult advisor<br/>(if budget)"}
+        AdviseCB -->|verdict=retry| Impl
+        AdviseCB -->|abort / change-strategy / no consult| RBall[full restore]
     end
 
     StepLoop --> step
@@ -166,7 +173,7 @@ flowchart TD
     Final -->|no| RetSkip
     Final -->|yes| Commit[⑤ commit]
     Commit --> Child[child:<br/>robustPRMergeWorkflow<br/>ParentClosePolicy=ABANDON]
-    Child --> RetOk([prUrl / merged]):::ret
+    Child --> RetOk([prUrl / merged + advisorAudits]):::ret
 
     RetSkip -.->|finally| Cleanup
     RetOk -.->|finally| Cleanup
@@ -382,6 +389,143 @@ default branch ではない `develop` / `release/*` などを Schedule の対象
 - ID は `workflowInfo().workflowId` から導出するか、Activity 側で生成して結果として返す。
 - Workflow ファイル直下に副作用のある top-level コードを書かない（`workflowInfo()` も関数内のみで呼ぶ）。
 - `extractContextArtifactActivity` の `generatedAt` は `workflowInfo().startTime` から導出 (deterministic)。
+
+---
+
+## Activities catalog
+
+Worker が登録する全 Activity の一覧。`src/activities/index.ts` の barrel が
+ソース・オブ・トゥルース。proxy 列はワークフロー側の `proxyActivities` グループ
+（`src/workflows/proxies.ts`）で、retry / timeout は **Activity Proxy の対応**
+セクションを参照。
+
+### `git/` — workspace + git plumbing
+
+| Activity | ファイル | proxy | 役割 |
+| --- | --- | --- | --- |
+| `cloneRepoActivity` | `git/clone.ts` | `heavy` | shallow clone + `agent/refactor/<id>` ブランチ作成 |
+| `commitAllActivity` | `git/commit.ts` | `heavy` | `git add -A` + commit。空 diff は `committed: false` |
+| `pushBranchActivity` | `git/push.ts` | `heavy` | `git push` (`-u` / `--force-with-lease` 切替可) |
+| `checkConflictActivity` | `git/check-conflict.ts` | `cheap` | base に対する trial merge → 衝突ファイル列挙 |
+| `cleanupWorkspaceActivity` | `git/cleanup.ts` | `cheap` | finally で workdir を削除 |
+| `diffStatActivity` | `git/diff-stat.ts` | `cheap` | Pre-Parliament gate 用の `--shortstat` |
+| `diffTextActivity` | `git/diff-text.ts` | `cheap` | reviewer に渡す diff 本文（`maxBytes` 切詰め） |
+| `statusPorcelainActivity` | `git/status-porcelain.ts` | `cheap` | drift 検知用 porcelain スナップショット |
+| `restoreActivity` | `git/restore.ts` | `cheap` | `paths` 指定なし → 全ファイル restore（critical_block 用） |
+
+### `github/` — gh CLI
+
+| Activity | ファイル | proxy | 役割 |
+| --- | --- | --- | --- |
+| `createPRActivity` | `github/create-pr.ts` | `cheap` | `gh pr create` + view で `{number, url}` 取得 |
+| `waitForCIActivity` | `github/wait-for-ci.ts` | `ciWait` | `statusCheckRollup` + `state` を polling。external close/merge も検知 |
+| `fetchFailedRunLogsActivity` | `github/fetch-failed-logs.ts` | `cheap` | `gh run view --log-failed` (codex への入力) |
+| `mergePRActivity` | `github/merge-pr.ts` | `cheap` | `gh pr merge --auto --squash --delete-branch` |
+| `observePRStateActivity` | `github/observe-pr-state.ts` | `cheap` | `gh pr view --json state,mergedAt`（pre-merge gate / post-merge poll で利用） |
+
+### `codex/` / `refactor/` / `advisor/` — LLM 系
+
+| Activity | ファイル | proxy | sandbox | 役割 |
+| --- | --- | --- | --- | --- |
+| `codexActivity` | `codex/codex.ts` | `heavyCodex` | workspace-write | pr-lifecycle の CI 自己修復・コンフリクト解消 |
+| `extractContextArtifactActivity` | `refactor/extract-context.ts` | `contextCodex` | workspace-write | repo summary を蒸留（workflow 開始時 1 回） |
+| `planActivity` | `refactor/plan.ts` | `planCodex` | workspace-write | テーマ + ≤2 ステップに分解。Read-only 想定 |
+| `implementActivity` | `refactor/implement.ts` | `implementCodex` | workspace-write | 1 ステップを working tree に適用 |
+| `reviewActivity` | `refactor/review.ts` | `reviewCodex` | workspace-write | concern 別 reviewer (correctness / quality)。プロンプトで read-only 強制 + drift audit でも担保 |
+| `consultAdvisorActivity` | `advisor/advisor.ts` | `advisor` | **read-only** | 上位モデル相談（gate ベース。budget で上限） |
+
+---
+
+## Configuration reference
+
+Worker が読む環境変数と、Workflow / Schedule に渡す入力フィールドを 1 箇所にまとめる。
+`.env.example` がキー一覧の正、本セクションは説明と既定値の正。
+
+### Worker 環境変数
+
+| Variable | 必須? | 既定値 | 用途 |
+| --- | --- | --- | --- |
+| `TEMPORAL_ADDRESS` | yes | `localhost:7233` | Temporal Frontend gRPC エンドポイント |
+| `TEMPORAL_NAMESPACE` | no | `default` | Temporal 名前空間 |
+| `TEMPORAL_TASK_QUEUE` | no | `repo-steward` | Worker / Client が共有するキュー名 |
+| `TEMPORAL_TLS` | no | `false` | `true` で mTLS を有効化 |
+| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | no | `4` | Activity スロット数（codex の並列度に直結） |
+| `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | no | `20` | Workflow タスクスロット数 |
+| `NODE_ENV` | no | (unset) | `production` のとき pre-built bundle が無いと起動失敗 |
+| `GITHUB_TOKEN` | yes | — | `gh` / `git push` の認証。fine-grained PAT 推奨 |
+| `GIT_BOT_NAME` | no | `repo-steward-bot` | auto-commit の `user.name` |
+| `GIT_BOT_EMAIL` | no | `ai-agent@users.noreply.github.com` | auto-commit の `user.email` |
+| `CODEX_HOME` | no | `~/.codex` | `auth.json` を別パスにマウントする時に上書き |
+| `ADVISOR_MODEL` | no | (unset → codex デフォルト) | `consultAdvisorActivity` が `codex exec --model` に渡すモデル名 |
+
+### `periodicRefactorWorkflow` 入力 (`PeriodicRefactorInput`)
+
+| Field | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `repoFullName` | `string` | (必須) | `owner/name` 形式 |
+| `baseBranch` | `string?` | `main` | clone 時に fetch する base ref |
+| `refactorBrief` | `string?` | (なし) | planner に渡すユーザー指示。空なら planner が自由にテーマ選択 |
+| `autoMerge` | `boolean?` | `true` | `false` で child を merge 直前まで止める |
+| `maxAdvisorConsults` | `number?` | `1` | advisor を呼べる回数。`0` で完全無効化 |
+
+### `robustPRMergeWorkflow` 入力 (`RobustPRMergeInput`)
+
+| Field | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `repoFullName` | `string` | (必須) | `owner/name` |
+| `workdir` | `string` | (必須) | 親が確保した workdir。同 Pod 上で利用 |
+| `branch` | `string` | (必須) | push 対象の branch |
+| `baseBranch` | `string` | (必須) | merge 先 |
+| `prTitle` / `prBody` | `string` | (必須) | PR の表示テキスト |
+| `maxFixIterations` | `number?` | `8` | CI 修復 + コンフリクト解消の合計上限 |
+| `autoMerge` | `boolean?` | `true` | `false` で `outcome: 'auto-merge-disabled'` で終了 |
+| `maxAdvisorConsults` | `number?` | `2` | advisor 上限。`ci-self-heal` と `no-diff` で 1 ずつ消費 |
+| `postMergePollAttempts` | `number?` | `6` | merge 確認 poll の最大回数 |
+| `postMergePollIntervalMs` | `number?` | `10_000` | poll 間隔（ミリ秒） |
+
+### Workflow 内ハードコード定数
+
+| 定数 | 場所 | 値 | 意味 |
+| --- | --- | --- | --- |
+| `MAX_SPAWNS` | `periodic.ts` | `16` | codex 呼び出し総数の上限（context+plan+impl+review 全部含む） |
+| `MAX_STEPS` | `periodic.ts` | `2` | planner が返したステップを切り詰める上限 |
+| `MAX_ITER` | `periodic.ts` | `2` | 各ステップの implement→review ループ上限 |
+| `TRIVIAL_LINE_THRESHOLD` | `periodic.ts` | `30` | これ未満の (ins+del) は Pre-Parliament Gate でスキップ |
+| `TRIVIAL_FILE_THRESHOLD` | `periodic.ts` | `3` | これ未満の files-changed は Pre-Parliament Gate でスキップ |
+| `REVIEW_DIFF_BYTES` | `periodic.ts` | `8 * 1024` | reviewer に渡す diff の最大バイト数 |
+| `REVIEWER_CONCERNS` | `periodic.ts` | `['correctness', 'quality']` | Parliament の reviewer ロール |
+| `CI_POLL_INTERVAL_SECONDS` | `pr-lifecycle.ts` | `30` | `waitForCIActivity` の polling 間隔（heartbeat とは独立） |
+| `CI_MAX_WAIT_SECONDS` | `pr-lifecycle.ts` | `3600` | CI 待ちの上限（超えると `CITimeout`） |
+| `POST_MERGE_POLL_ATTEMPTS` | `pr-lifecycle.ts` | `6` | 既定の merge 観測 poll 回数 |
+| `POST_MERGE_POLL_INTERVAL_MS` | `pr-lifecycle.ts` | `10_000` | 既定の poll 間隔 |
+
+---
+
+## ApplicationFailure type catalog
+
+operator が Temporal Web UI で見ることになる `ApplicationFailure.type` を一覧化する。
+`Retryable?` 列は **Activity 側で投げた瞬間にリトライされるか** を示す。
+`No (nonRetryable)` は `ApplicationFailure.nonRetryable()` で投げているため
+proxy の RetryPolicy 設定とは無関係に即失敗。`No (workflow throw)` は
+workflow コードからの throw なので Workflow 自体が失敗終了する。
+
+| Type | 投げる場所 | Retryable? | 意味と対処 |
+| --- | --- | --- | --- |
+| `MissingCredentials` | `gh-env.ts` / `git-env.ts` / `run-codex.ts` | No (nonRetryable) | `GITHUB_TOKEN` 未設定 / `~/.codex/auth.json` 不在。Worker 環境を直す |
+| `InvalidGitRef` | `git-env.ts` | No (nonRetryable) | base branch が空文字。Schedule 入力 / workflow 引数を直す |
+| `InvalidGitHubOutput` | `gh-json.ts` | No (nonRetryable) | gh CLI の JSON が想定外。gh のバージョン更新 / API 仕様変更を疑う |
+| `PlannerOutputInvalid` | `refactor/_internal/parsers.ts` | No (nonRetryable) | planner が JSON を返さなかった。プロンプトかモデルの問題。periodic は `skipped: 'plan-failed'` で着地 |
+| `AdvisorOutputInvalid` | `advisor/advisor.ts` | No (nonRetryable, proxy 側で除外) | advisor が JSON を返さなかった。`reply: undefined` 扱いで通常分岐に落ちる |
+| `RateLimited` | `run-codex.ts` | **Yes** | codex CLI の stderr/stdout に rate-limit 文字列。proxy の `codexQuotaFriendlyRetry` で指数バックオフ |
+| `CodexInvocationError` | `run-codex.ts` | **Yes** | codex の非 0 終了。`RateLimited` 以外。リトライで救えなければ最終的に Workflow 失敗 |
+| `CITimeout` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | `CI_MAX_WAIT_SECONDS` 経過しても CI 未収束。GitHub 側を確認 |
+| `AdvisorAbort` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | iter ≥ 2 で advisor が `verdict: abort` を返した。意図的な早期停止 |
+| `NoFixDiff` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | codex が "fixed it" と言ったが diff が空。プロンプト誤解 / sandbox 問題を疑う |
+| `MaxIterationsExceeded` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | `maxFixIterations` まで使い切っても CI green に至らず |
+
+`nonRetryableErrorTypes` に登録されている `MissingCredentials` / `InvalidGitRef` /
+`PlannerOutputInvalid` / `AdvisorOutputInvalid` は `proxies.ts` の各 RetryPolicy
+で除外されているため、proxy 経由でも 1 回でフェイルする。
 
 ---
 
