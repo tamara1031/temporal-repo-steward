@@ -6,6 +6,7 @@
 
 import { ApplicationFailure, log } from '@temporalio/activity';
 import { extractJsonObject } from '../../_internal/json-extract';
+import { ERR_PLANNER_OUTPUT_INVALID } from '../../../errors';
 import type { ContextArtifact, PlanOutput, PlanStep, PlanReviewConcern, PlanReviewOutput, ReviewConcern, ReviewOutput } from './types';
 
 export function parseContextOutput(text: string): Omit<ContextArtifact, 'generatedAt'> {
@@ -34,7 +35,7 @@ export function parsePlanOutput(text: string): PlanOutput {
     // workflow's own catch-and-degrade path (`skipped: 'plan-failed'`) handle it.
     throw ApplicationFailure.create({
       message: 'planner did not return a parseable JSON object',
-      type: 'PlannerOutputInvalid',
+      type: ERR_PLANNER_OUTPUT_INVALID,
       details: [text.slice(0, 2048)],
     });
   }
@@ -46,7 +47,7 @@ export function parsePlanOutput(text: string): PlanOutput {
   if (!theme) {
     throw ApplicationFailure.create({
       message: 'planner output missing required `theme` field',
-      type: 'PlannerOutputInvalid',
+      type: ERR_PLANNER_OUTPUT_INVALID,
       details: [text.slice(0, 2048)],
     });
   }

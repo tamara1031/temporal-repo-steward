@@ -16,6 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { ApplicationFailure } from '@temporalio/common';
+import { ERR_PLANNER_OUTPUT_INVALID } from '../src/errors';
 import { randomUUID } from 'crypto';
 import { designPhaseWorkflow } from '../src/workflows';
 import {
@@ -139,7 +140,7 @@ describe('designPhaseWorkflow', () => {
       planActivity: async () => {
         throw ApplicationFailure.nonRetryable(
           'planner did not return a parseable JSON object',
-          'PlannerOutputInvalid',
+          ERR_PLANNER_OUTPUT_INVALID,
         );
       },
     });

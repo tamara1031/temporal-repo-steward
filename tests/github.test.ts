@@ -1,5 +1,6 @@
 import { ApplicationFailure } from '@temporalio/activity';
 import { describe, expect, it } from 'vitest';
+import { ERR_INVALID_GH_OUTPUT } from '../src/errors';
 import { parsePRStateJSON, parsePRViewJSON } from '../src/activities/github';
 
 describe('github activity helpers', () => {
@@ -59,11 +60,11 @@ function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): v
     fn();
   } catch (err) {
     expect(err).toBeInstanceOf(ApplicationFailure);
-    expect((err as ApplicationFailure).type).toBe('InvalidGitHubOutput');
+    expect((err as ApplicationFailure).type).toBe(ERR_INVALID_GH_OUTPUT);
     for (const messagePart of messageParts) {
       expect((err as Error).message).toContain(messagePart);
     }
     return;
   }
-  throw new Error('Expected InvalidGitHubOutput ApplicationFailure');
+  throw new Error(`Expected ${ERR_INVALID_GH_OUTPUT} ApplicationFailure`);
 }
