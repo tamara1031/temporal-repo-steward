@@ -1,5 +1,5 @@
-import { log, sleep, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
-import { cheap, heavy, heavyCodex, ciWait } from './proxies';
+import { log, workflowInfo, ApplicationFailure } from '@temporalio/workflow';
+import { cheap, heavy, heavyCodex, ciWait, postMergeWait } from './proxies';
 import type {
   CheckConflictOutput,
   CIResult,
@@ -202,12 +202,12 @@ export async function robustPRMergeWorkflow(
       deleteBranch: true,
     });
 
-    const observed = await pollUntilMerged(
-      input.repoFullName,
-      pr.number,
-      input.postMergePollAttempts ?? POST_MERGE_POLL_ATTEMPTS,
-      input.postMergePollIntervalMs ?? POST_MERGE_POLL_INTERVAL_MS,
-    );
+    const observed = await postMergeWait.waitForPostMergeActivity({
+      repoFullName: input.repoFullName,
+      prNumber: pr.number,
+      maxPollAttempts: input.postMergePollAttempts ?? POST_MERGE_POLL_ATTEMPTS,
+      pollIntervalMs: input.postMergePollIntervalMs ?? POST_MERGE_POLL_INTERVAL_MS,
+    });
     return finalize(iter, observed === 'merged', observed);
   }
 
@@ -435,39 +435,4 @@ async function collectFailedLogs(
     }),
   );
   return parts.join('\n\n');
-}
-
-/**
- * Poll for the actual merge to land. `gh pr merge --auto` only requests the
- * merge — when branch-protection requires "up to date", the merge can sit in
- * a queue.
- *
- * Returns one of three outcomes (no thrown failures — every CLOSED/MERGED
- * lifecycle state is a valid terminal):
- *   - `merged`: MERGED observed (merge actually landed).
- *   - `closed-externally`: CLOSED observed without merging (a human or the
- *     merge queue closed the PR — operator visibility, not an error).
- *   - `merge-queued`: still OPEN after the poll window — branch protection
- *     is still gating the merge. Operator should check the GitHub UI.
- */
-async function pollUntilMerged(
-  repoFullName: string,
-  prNumber: number,
-  attempts: number,
-  intervalMs: number,
-): Promise<'merged' | 'merge-queued' | 'closed-externally'> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const observed = await cheap.observePRStateActivity({ repoFullName, prNumber });
-    if (observed.state === 'MERGED') {
-      log.info('PR merge observed', { prNumber, mergedAt: observed.mergedAt });
-      return 'merged';
-    }
-    if (observed.state === 'CLOSED') {
-      log.info('PR closed externally during post-merge poll', { prNumber });
-      return 'closed-externally';
-    }
-    await sleep(intervalMs);
-  }
-  log.info('PR still queued after merge request; reporting merge-queued', { prNumber });
-  return 'merge-queued';
 }

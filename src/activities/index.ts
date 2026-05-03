@@ -13,7 +13,8 @@
  *                 check-conflict, cleanup, diff-stat, diff-text,
  *                 status-porcelain, restore)
  *   - github/     `gh` CLI activities (create-pr, wait-for-ci,
- *                 fetch-failed-logs, merge-pr, observe-pr-state)
+ *                 fetch-failed-logs, merge-pr, observe-pr-state,
+ *                 wait-for-pr-state, wait-for-post-merge)
  *   - refactor/   codex role activities for the periodic pipeline
  *                 (extract-context, plan, implement, review)
  */
@@ -37,12 +38,16 @@ export {
   fetchFailedRunLogsActivity,
   mergePRActivity,
   observePRStateActivity,
+  waitForPRStateActivity,
+  waitForPostMergeActivity,
 } from './github';
 export type {
   PRInfo,
   CIResult,
   ObservePRStateOutput,
   PRLifecycleState,
+  WaitForPRStateOutput,
+  PostMergeOutcome,
 } from './github';
 export type { CheckConflictOutput } from './git';
 export { codexActivity } from './codex';

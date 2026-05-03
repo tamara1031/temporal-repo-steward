@@ -1,7 +1,13 @@
 import { ApplicationFailure } from '@temporalio/activity';
 import { describe, expect, it } from 'vitest';
 import { ERR_INVALID_GH_OUTPUT } from '../src/errors';
-import { parsePRStateJSON, parsePRViewJSON } from '../src/activities/github';
+import {
+  mapPostMergeStateToOutcome,
+  parsePRStateJSON,
+  parsePRViewJSON,
+} from '../src/activities/github';
+import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
+import type { PRLifecycleState } from '../src/activities/github';
 
 describe('github activity helpers', () => {
   it('parses PR view JSON', () => {
@@ -55,6 +61,83 @@ describe('parsePRStateJSON', () => {
   });
 });
 
+describe('mapPostMergeStateToOutcome', () => {
+  it('maps MERGED to merged', () => {
+    expect(mapPostMergeStateToOutcome('MERGED', false)).toBe('merged');
+  });
+
+  it('maps CLOSED to closed-externally', () => {
+    expect(mapPostMergeStateToOutcome('CLOSED', false)).toBe('closed-externally');
+  });
+
+  it('keeps OPEN non-terminal while polling budget remains', () => {
+    expect(mapPostMergeStateToOutcome('OPEN', false)).toBeUndefined();
+  });
+
+  it('maps OPEN to merge-queued only after the polling budget is exhausted', () => {
+    expect(mapPostMergeStateToOutcome('OPEN', true)).toBe('merge-queued');
+  });
+});
+
+describe('pollPostMergeOutcome', () => {
+  it('continues polling while OPEN and stops when MERGED is observed', async () => {
+    const poll = makePostMergePoll(['OPEN', 'MERGED']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merged');
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([10]);
+    expect(poll.heartbeats.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('stops immediately when CLOSED is observed', async () => {
+    const poll = makePostMergePoll(['CLOSED']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('closed-externally');
+
+    expect(poll.observed()).toBe(1);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('returns merge-queued when OPEN remains through the configured attempts', async () => {
+    const poll = makePostMergePoll(['OPEN', 'OPEN', 'OPEN']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merge-queued');
+
+    expect(poll.observed()).toBe(3);
+    expect(poll.sleeps).toEqual([10, 10]);
+  });
+
+  it('returns merge-queued when OPEN remains through the activity-owned wait budget', async () => {
+    const poll = makePostMergePoll(['OPEN', 'OPEN', 'OPEN']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 10, pollIntervalMs: 10, maxActivityWaitMs: 15 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merge-queued');
+
+    expect(poll.observed()).toBe(3);
+    expect(poll.sleeps).toEqual([10, 5]);
+  });
+});
+
 function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): void {
   try {
     fn();
@@ -67,4 +150,38 @@ function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): v
     return;
   }
   throw new Error(`Expected ${ERR_INVALID_GH_OUTPUT} ApplicationFailure`);
+}
+
+function makePostMergePoll(states: PRLifecycleState[]): {
+  deps: Parameters<typeof pollPostMergeOutcome>[1];
+  sleeps: number[];
+  heartbeats: unknown[];
+  observed: () => number;
+} {
+  const sleeps: number[] = [];
+  const heartbeats: unknown[] = [];
+  let observed = 0;
+  let now = 0;
+  return {
+    deps: {
+      observe: async () => {
+        const state = states[Math.min(observed, states.length - 1)];
+        observed += 1;
+        return state === 'MERGED'
+          ? { state, mergedAt: '2026-05-03T00:00:00Z' }
+          : { state };
+      },
+      heartbeat: (details) => {
+        heartbeats.push(details);
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+      now: () => now,
+    },
+    sleeps,
+    heartbeats,
+    observed: () => observed,
+  };
 }

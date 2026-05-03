@@ -122,3 +122,29 @@ export const ciWait = proxyActivities<typeof activities>({
     nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
   },
 });
+
+/** Long-running GitHub PR state poll. The activity heartbeats; workflow timer is unused. */
+export const prStateWait = proxyActivities<typeof activities>({
+  startToCloseTimeout: '70 minutes',
+  heartbeatTimeout: '2 minutes',
+  retry: {
+    initialInterval: '15s',
+    backoffCoefficient: 2,
+    maximumInterval: '2 minutes',
+    maximumAttempts: 3,
+    nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
+  },
+});
+
+/** Focused post-merge poll. The activity heartbeats; workflow timer is unused. */
+export const postMergeWait = proxyActivities<typeof activities>({
+  startToCloseTimeout: '5 minutes',
+  heartbeatTimeout: '2 minutes',
+  retry: {
+    initialInterval: '15s',
+    backoffCoefficient: 2,
+    maximumInterval: '2 minutes',
+    maximumAttempts: 3,
+    nonRetryableErrorTypes: [...PROXY_NON_RETRYABLE],
+  },
+});

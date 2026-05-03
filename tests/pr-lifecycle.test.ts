@@ -67,7 +67,7 @@ describe('robustPRMergeWorkflow', () => {
       'checkConflictActivity',
       'observePRStateActivity', // pre-merge state check
       'mergePRActivity',
-      'observePRStateActivity', // post-merge poll
+      'waitForPostMergeActivity',
     ]);
   });
 
@@ -82,18 +82,12 @@ describe('robustPRMergeWorkflow', () => {
     expect((result as any).merged).toBe(true);
   });
 
-  it('treats pollUntilMerged CLOSED as closed-externally (not a thrown failure)', async () => {
-    let observeCalls = 0;
+  it('treats post-merge CLOSED as closed-externally (not a thrown failure)', async () => {
     const { result } = await runWith(
       'pr-poll-closed',
       {
-        observePRStateActivity: async () => {
-          observeCalls += 1;
-          // First call is the pre-merge gate — return OPEN to let the merge
-          // request proceed. Second call is the post-merge poll — return
-          // CLOSED to exercise the new clean-exit path.
-          return { state: observeCalls === 1 ? ('OPEN' as const) : ('CLOSED' as const) };
-        },
+        observePRStateActivity: async () => ({ state: 'OPEN' as const }),
+        waitForPostMergeActivity: async () => 'closed-externally' as const,
       },
       { postMergePollAttempts: 3, postMergePollIntervalMs: 1 },
     );
@@ -106,13 +100,14 @@ describe('robustPRMergeWorkflow', () => {
       'pr-merge-queued',
       {
         observePRStateActivity: async () => ({ state: 'OPEN' as const }),
+        waitForPostMergeActivity: async () => 'merge-queued' as const,
       },
       { postMergePollAttempts: 3, postMergePollIntervalMs: 1 },
     );
     expect((result as any).merged).toBe(false);
     expect((result as any).outcome).toBe('merge-queued');
-    // 1 pre-merge state check + 3 post-merge poll attempts.
-    expect(calls.log.filter((c) => c.name === 'observePRStateActivity').length).toBe(4);
+    expect(calls.log.filter((c) => c.name === 'observePRStateActivity').length).toBe(1);
+    expect(calls.log.filter((c) => c.name === 'waitForPostMergeActivity').length).toBe(1);
   });
 
   it('returns closed-externally without throwing when CI loop sees PR closed', async () => {
