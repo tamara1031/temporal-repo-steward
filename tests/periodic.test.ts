@@ -3,9 +3,11 @@ import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { randomUUID } from 'crypto';
 import { periodicRefactorWorkflow } from '../src/workflows';
+import type { createPRActivity } from '../src/activities/github/create-pr';
 import { getWorkflowBundle, makeMockActivities } from './helpers';
 
 let env: TestWorkflowEnvironment;
+type CreatePRActivityInput = Parameters<typeof createPRActivity>[0];
 
 beforeAll(async () => {
   env = await TestWorkflowEnvironment.createLocal();
@@ -149,7 +151,19 @@ describe('periodicRefactorWorkflow', () => {
   });
 
   it('runs Parliament and merges when diff is non-trivial and reviewers approve', async () => {
-    const { activities, calls } = makeMockActivities();
+    let capturedBody = '';
+    const { activities, calls } = makeMockActivities({
+      createPRActivity: async (input: CreatePRActivityInput) => {
+        capturedBody = input.body;
+        return {
+          number: 42,
+          url: 'https://github.com/example/repo/pull/42',
+          branch: input.branch,
+          baseBranch: input.baseBranch,
+          repoFullName: input.repoFullName,
+        };
+      },
+    });
 
     const taskQueue = 'periodic-test-happy';
     const worker = await Worker.create({
@@ -181,6 +195,12 @@ describe('periodicRefactorWorkflow', () => {
     expect(names).toContain('createPRActivity');
     expect(names).toContain('waitForCIActivity');
     expect(names).toContain('mergePRActivity');
+    expect(capturedBody).toContain('Used **7 / 22** codex calls.');
+    expect(capturedBody).toContain('- context: 1');
+    expect(capturedBody).toContain('- planner: 1');
+    expect(capturedBody).toContain('- plan-reviewer: 2');
+    expect(capturedBody).toContain('- implementer: 1');
+    expect(capturedBody).toContain('- reviewer: 2');
   });
 
   it('rolls back and skips PR on critical_block when advisor agrees (verdict=abort)', async () => {
@@ -328,7 +348,7 @@ describe('periodicRefactorWorkflow', () => {
         rationale: 'looks over-cautious; one more pass should land it',
         suggestedAction: 'add the suggested guard and retry',
       }),
-      createPRActivity: async (input: any) => {
+      createPRActivity: async (input: CreatePRActivityInput) => {
         capturedBody = input.body;
         return {
           number: 42,
