@@ -25,6 +25,7 @@
 import { ApplicationFailure } from '@temporalio/activity';
 import { extractJsonObject } from '../_internal/json-extract';
 import { runCodexExec } from '../_internal/run-codex';
+import { ERR_ADVISOR_OUTPUT_INVALID } from '../../errors';
 
 export type AdvisorVerdict = 'retry' | 'abort' | 'change-strategy';
 
@@ -117,7 +118,7 @@ ${optionsBlock}`;
   if (!json) {
     throw ApplicationFailure.create({
       message: 'advisor returned non-JSON output',
-      type: 'AdvisorOutputInvalid',
+      type: ERR_ADVISOR_OUTPUT_INVALID,
       details: [res.lastMessage.slice(0, 1024)],
     });
   }

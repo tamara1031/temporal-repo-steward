@@ -4,6 +4,7 @@
  */
 
 import { ApplicationFailure } from '@temporalio/activity';
+import { ERR_MISSING_CREDENTIALS, ERR_INVALID_GIT_REF } from '../../../errors';
 
 /**
  * Build env that authenticates git over HTTPS to github.com WITHOUT putting
@@ -16,7 +17,7 @@ export function ghAuthEnv(): NodeJS.ProcessEnv {
   if (!token) {
     throw ApplicationFailure.nonRetryable(
       'GITHUB_TOKEN env var is missing on the worker',
-      'MissingCredentials',
+      ERR_MISSING_CREDENTIALS,
     );
   }
   const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
@@ -37,7 +38,7 @@ export function gitCloneUrl(repoFullName: string): string {
 export function remoteBranchRef(branch: string): string {
   const trimmed = branch.trim();
   if (!trimmed) {
-    throw ApplicationFailure.nonRetryable('base branch must not be empty', 'InvalidGitRef');
+    throw ApplicationFailure.nonRetryable('base branch must not be empty', ERR_INVALID_GIT_REF);
   }
   return `refs/remotes/origin/${trimmed}`;
 }

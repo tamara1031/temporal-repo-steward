@@ -1,4 +1,5 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import { ERR_MISSING_CREDENTIALS } from '../../../errors';
 
 /**
  * Build env that lets `gh` CLI authenticate. Both env names are set so the
@@ -9,7 +10,7 @@ export function ghEnv(): NodeJS.ProcessEnv {
   if (!token) {
     throw ApplicationFailure.nonRetryable(
       'GITHUB_TOKEN env var is missing on the worker',
-      'MissingCredentials',
+      ERR_MISSING_CREDENTIALS,
     );
   }
   return { GH_TOKEN: token, GITHUB_TOKEN: token };

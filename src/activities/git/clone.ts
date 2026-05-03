@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ApplicationFailure } from '@temporalio/activity';
 import { execOrThrow } from '../_internal/exec';
+import { ERR_MISSING_CREDENTIALS } from '../../errors';
 import {
   fetchRemoteBranchRefSpec,
   ghAuthEnv,
@@ -44,7 +45,7 @@ export async function cloneRepoActivity(input: CloneInput): Promise<CloneOutput>
   if (!botName || !botEmail) {
     throw ApplicationFailure.nonRetryable(
       'GIT_BOT_NAME and GIT_BOT_EMAIL env vars are required on the worker so auto-generated commits attribute to a known account',
-      'MissingCredentials',
+      ERR_MISSING_CREDENTIALS,
     );
   }
   await execOrThrow('git', ['config', 'user.email', botEmail], { cwd: workdir });

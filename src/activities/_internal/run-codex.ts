@@ -16,6 +16,11 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { execCommand } from './exec';
+import {
+  ERR_MISSING_CREDENTIALS,
+  ERR_RATE_LIMITED,
+  ERR_CODEX_INVOCATION,
+} from '../../errors';
 
 export interface CodexRunInput {
   workdir: string;
@@ -48,7 +53,7 @@ async function ensureCodexAuth(): Promise<void> {
   } catch {
     throw ApplicationFailure.nonRetryable(
       `codex auth not found at ${p}; run \`codex login\` locally and mount the resulting auth.json`,
-      'MissingCredentials',
+      ERR_MISSING_CREDENTIALS,
     );
   }
 }
@@ -108,13 +113,13 @@ export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput
       if (isRateLimit(res.stderr) || isRateLimit(res.stdout)) {
         throw ApplicationFailure.create({
           message: `codex hit a rate limit (exit ${res.code}): ${stderrSnippet}`,
-          type: 'RateLimited',
+          type: ERR_RATE_LIMITED,
           details: [res.stdout.slice(0, 2048), res.stderr.slice(0, 2048)],
         });
       }
       throw ApplicationFailure.create({
         message: `codex exited ${res.code}: ${stderrSnippet}`,
-        type: 'CodexInvocationError',
+        type: ERR_CODEX_INVOCATION,
         details: [res.stdout.slice(0, 4096), res.stderr.slice(0, 4096)],
       });
     }

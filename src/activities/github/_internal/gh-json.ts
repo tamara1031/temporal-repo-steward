@@ -1,4 +1,5 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import { ERR_INVALID_GH_OUTPUT } from '../../../errors';
 
 export function parseGhJSON(stdout: string, commandDescription: string): unknown {
   try {
@@ -14,5 +15,5 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function invalidGhOutput(message: string): ApplicationFailure {
-  return ApplicationFailure.nonRetryable(message, 'InvalidGitHubOutput');
+  return ApplicationFailure.nonRetryable(message, ERR_INVALID_GH_OUTPUT);
 }
