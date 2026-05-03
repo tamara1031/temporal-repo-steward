@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { NativeConnection, Worker, type WorkerOptions } from '@temporalio/worker';
 import * as activities from './activities';
-import { TASK_QUEUE } from './constants';
+import { loadWorkerRuntimeConfig } from './runtime-config';
 
 /**
  * Resolve workflow source for the Worker. Production uses a pre-bundled file
@@ -27,32 +27,26 @@ function resolveWorkflowSource(): Pick<WorkerOptions, 'workflowBundle' | 'workfl
 }
 
 async function run(): Promise<void> {
-  const address = process.env.TEMPORAL_ADDRESS ?? 'localhost:7233';
-  const namespace = process.env.TEMPORAL_NAMESPACE ?? 'default';
-  const taskQueue = process.env.TEMPORAL_TASK_QUEUE ?? TASK_QUEUE;
+  const config = loadWorkerRuntimeConfig();
 
   const connection = await NativeConnection.connect({
-    address,
-    tls: process.env.TEMPORAL_TLS === 'true' ? true : false,
+    address: config.address,
+    tls: config.tls,
   });
 
   const worker = await Worker.create({
     connection,
-    namespace,
-    taskQueue,
+    namespace: config.namespace,
+    taskQueue: config.taskQueue,
     ...resolveWorkflowSource(),
     activities,
     // Reasonable defaults for an LLM-heavy worker; tune via env if needed.
-    maxConcurrentActivityTaskExecutions: Number(
-      process.env.TEMPORAL_MAX_CONCURRENT_ACTIVITIES ?? 4,
-    ),
-    maxConcurrentWorkflowTaskExecutions: Number(
-      process.env.TEMPORAL_MAX_CONCURRENT_WORKFLOWS ?? 20,
-    ),
+    maxConcurrentActivityTaskExecutions: config.maxConcurrentActivityTaskExecutions,
+    maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflowTaskExecutions,
   });
 
   console.log(
-    `[worker] connected to ${address}, namespace=${namespace}, queue=${taskQueue}`,
+    `[worker] connected to ${config.address}, namespace=${config.namespace}, queue=${config.taskQueue}`,
   );
 
   const shutdown = async (signal: string) => {

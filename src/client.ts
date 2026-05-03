@@ -5,7 +5,7 @@
  */
 import 'dotenv/config';
 import { Client, Connection, ScheduleOverlapPolicy } from '@temporalio/client';
-import { TASK_QUEUE } from './constants';
+import { loadTemporalRuntimeConfig } from './runtime-config';
 import { periodicRefactorWorkflow } from './workflows';
 
 interface CLIArgs {
@@ -38,15 +38,14 @@ function parseArgs(argv: string[]): CLIArgs {
 
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv);
+  const config = loadTemporalRuntimeConfig();
   const connection = await Connection.connect({
-    address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233',
+    address: config.address,
   });
   const client = new Client({
     connection,
-    namespace: process.env.TEMPORAL_NAMESPACE ?? 'default',
+    namespace: config.namespace,
   });
-
-  const taskQueue = process.env.TEMPORAL_TASK_QUEUE ?? TASK_QUEUE;
 
   switch (cli.command) {
     case 'install-schedule': {
@@ -57,7 +56,7 @@ async function main(): Promise<void> {
           type: 'startWorkflow',
           workflowType: periodicRefactorWorkflow,
           args: [{ repoFullName: cli.repo, baseBranch: cli.baseBranch }],
-          taskQueue,
+          taskQueue: config.taskQueue,
         },
         policies: { overlap: ScheduleOverlapPolicy.SKIP },
       });
@@ -67,7 +66,7 @@ async function main(): Promise<void> {
     case 'run-once': {
       const handle = await client.workflow.start(periodicRefactorWorkflow, {
         args: [{ repoFullName: cli.repo, baseBranch: cli.baseBranch }],
-        taskQueue,
+        taskQueue: config.taskQueue,
         workflowId: `periodic-refactor-once-${Date.now()}`,
       });
       console.log('Started workflow', handle.workflowId);
