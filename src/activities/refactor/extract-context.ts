@@ -1,4 +1,4 @@
-import { runCodexExec } from '../_internal/run-codex';
+import { runRefactorCodex } from './_internal/codex-runner';
 import { parseContextOutput } from './_internal/parsers';
 import { PROMPTS } from './_internal/prompts';
 import type { ContextArtifact } from './_internal/types';
@@ -21,10 +21,11 @@ export async function extractContextArtifactActivity(
   input: ExtractContextInput,
 ): Promise<ContextArtifact> {
   const prompt = PROMPTS.context();
-  const res = await runCodexExec({
+  const res = await runRefactorCodex({
     workdir: input.workdir,
     prompt,
-    timeoutMs: input.timeoutMs ?? CONTEXT_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs,
+    defaultTimeoutMs: CONTEXT_TIMEOUT_MS,
   });
   const parsed = parseContextOutput(res.lastMessage);
   return { ...parsed, generatedAt: input.generatedAt };
