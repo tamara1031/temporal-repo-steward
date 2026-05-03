@@ -25,6 +25,12 @@ export interface CodexRunInput {
   timeoutMs: number;
   /** Optional model override (otherwise uses codex's default). */
   model?: string;
+  /**
+   * Sandbox profile passed to codex. `workspace-write` (default) lets codex
+   * edit the working tree; `read-only` is for advisory roles that should never
+   * mutate state — they observe and return a verdict.
+   */
+  sandbox?: 'workspace-write' | 'read-only';
 }
 
 export interface CodexRunOutput {
@@ -69,7 +75,7 @@ export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput
     'never',
     'exec',
     '--sandbox',
-    'workspace-write',
+    input.sandbox ?? 'workspace-write',
     '--output-last-message',
     lastMsgPath,
   ];

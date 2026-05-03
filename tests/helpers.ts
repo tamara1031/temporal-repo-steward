@@ -66,12 +66,20 @@ export function makeMockActivities(
     })),
     fetchFailedRunLogsActivity: record('fetchFailedRunLogsActivity', async () => 'log lines'),
     mergePRActivity: record('mergePRActivity', async () => undefined),
+    observePRStateActivity: record('observePRStateActivity', async () => ({
+      state: 'MERGED' as const,
+      mergedAt: '2026-05-03T00:00:00.000Z',
+    })),
     // Generic codex activity — used by pr-lifecycle for CI self-heal and
     // merge-conflict resolution. The refactor pipeline does NOT route through
     // this; it uses the role-specific activities below.
     codexActivity: record('codexActivity', async () => ({
       message: 'codex stub message',
       changedFiles: ['src/foo.ts'],
+    })),
+    consultAdvisorActivity: record('consultAdvisorActivity', async () => ({
+      verdict: 'retry' as const,
+      rationale: 'mock advisor: retry',
     })),
     // Refactor-pipeline role activities. Defaults model the happy path: a
     // workflow-init context artifact, a 1-step plan, a non-trivial implement

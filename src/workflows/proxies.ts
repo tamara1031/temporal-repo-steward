@@ -98,6 +98,24 @@ export const heavyCodex = proxyActivities<typeof activities>({
   retry: codexQuotaFriendlyRetry,
 });
 
+/**
+ * Advisor proxy — single-shot escalation. Tight timeout (the input is
+ * pre-summarized, so the call itself is small). Few attempts: if the advisor
+ * itself fails twice, falling back to a deterministic default is safer than
+ * looping. `RateLimited` is still retryable through the shared policy.
+ */
+export const advisor = proxyActivities<typeof activities>({
+  startToCloseTimeout: '4 minutes',
+  heartbeatTimeout: '1 minute',
+  retry: {
+    initialInterval: '20s',
+    backoffCoefficient: 2,
+    maximumInterval: '2 minutes',
+    maximumAttempts: 3,
+    nonRetryableErrorTypes: [...NON_RETRYABLE, 'AdvisorOutputInvalid'],
+  },
+});
+
 /** Long-running CI poll. The activity heartbeats; workflow timer is unused. */
 export const ciWait = proxyActivities<typeof activities>({
   startToCloseTimeout: '70 minutes',

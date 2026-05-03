@@ -183,7 +183,7 @@ describe('periodicRefactorWorkflow', () => {
     expect(names).toContain('mergePRActivity');
   });
 
-  it('rolls back and skips PR on critical_block from a reviewer', async () => {
+  it('rolls back and skips PR on critical_block when advisor agrees (verdict=abort)', async () => {
     let restoreCalledWithoutPaths = false;
     const { activities, calls } = makeMockActivities({
       reviewActivity: async (input: any) => {
@@ -200,6 +200,11 @@ describe('periodicRefactorWorkflow', () => {
         if (!input?.paths) restoreCalledWithoutPaths = true;
         return undefined;
       },
+      // Advisor agrees: keep the rollback.
+      consultAdvisorActivity: async () => ({
+        verdict: 'abort' as const,
+        rationale: 'agreed: critical security issue',
+      }),
       // After the full restore the working tree is clean → workflow returns
       // skipped: 'no-changes'.
       statusPorcelainActivity: async () => ({ entries: [] }),
@@ -221,13 +226,74 @@ describe('periodicRefactorWorkflow', () => {
       }),
     );
 
-    expect(result).toEqual({ skipped: 'no-changes' });
+    expect(result).toEqual({ skipped: 'no-changes', prOutcome: undefined } as any);
     expect(restoreCalledWithoutPaths).toBe(true);
     const names = calls.log.map((c) => c.name);
     expect(names).toContain('reviewActivity');
+    expect(names).toContain('consultAdvisorActivity');
     expect(names).toContain('restoreActivity');
     // Must not commit/push after rollback.
     expect(names).not.toContain('commitAllActivity');
     expect(names).not.toContain('createPRActivity');
+  });
+
+  it('downgrades critical_block to needs_revision when advisor returns retry', async () => {
+    let correctnessCalls = 0;
+    let statusCalls = 0;
+    const { activities, calls } = makeMockActivities({
+      reviewActivity: async (input: any) => {
+        if (input.concern === 'correctness') {
+          correctnessCalls += 1;
+          // First iteration trips the gate; second iteration approves.
+          if (correctnessCalls === 1) {
+            return {
+              verdict: 'critical_block' as const,
+              blocking_issues: ['over-cautious flag'],
+              suggestions: [],
+            };
+          }
+        }
+        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+      },
+      // Vary porcelain output per call so iter 1's no-progress check
+      // (`arraysEqual(prev, current)`) sees real progress and proceeds to
+      // Parliament again.
+      statusPorcelainActivity: async () => {
+        statusCalls += 1;
+        return { entries: [` M src/foo${statusCalls}.ts`] };
+      },
+      // Advisor downgrades critical_block to needs_revision.
+      consultAdvisorActivity: async () => ({
+        verdict: 'retry' as const,
+        rationale: 'reviewer is over-cautious',
+      }),
+    });
+
+    const taskQueue = 'periodic-test-advisor-downgrade';
+    const worker = await Worker.create({
+      connection: env.nativeConnection,
+      taskQueue,
+      workflowBundle: await getWorkflowBundle(),
+      activities,
+    });
+
+    await worker.runUntil(
+      env.client.workflow.execute(periodicRefactorWorkflow, {
+        taskQueue,
+        workflowId: `periodic-advisor-downgrade-${randomUUID()}`,
+        args: [{ repoFullName: 'example/repo' }],
+      }),
+    );
+
+    const names = calls.log.map((c) => c.name);
+    expect(names).toContain('consultAdvisorActivity');
+    // Advisor downgrade lets iter 1 re-run the implementer.
+    expect(names.filter((n) => n === 'implementActivity').length).toBe(2);
+    // Workflow must NOT have done a full restore (no `restoreActivity` with
+    // an undefined `paths` field).
+    const fullRestores = calls.log.filter(
+      (c) => c.name === 'restoreActivity' && !(c.args[0] as any)?.paths,
+    );
+    expect(fullRestores.length).toBe(0);
   });
 });

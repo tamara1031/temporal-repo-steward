@@ -6,12 +6,14 @@
  * re-exported here.
  *
  * Cluster map:
+ *   - advisor/    single-shot escalation hop to a stronger model
+ *                 (`consultAdvisorActivity`)
  *   - codex/      generic single-shot codex Activity (`codexActivity`)
  *   - git/        workspace + git-plumbing activities (clone, commit, push,
  *                 check-conflict, cleanup, diff-stat, diff-text,
  *                 status-porcelain, restore)
  *   - github/     `gh` CLI activities (create-pr, wait-for-ci,
- *                 fetch-failed-logs, merge-pr)
+ *                 fetch-failed-logs, merge-pr, observe-pr-state)
  *   - refactor/   codex role activities for the periodic pipeline
  *                 (extract-context, plan, implement, review)
  */
@@ -32,9 +34,23 @@ export {
   waitForCIActivity,
   fetchFailedRunLogsActivity,
   mergePRActivity,
+  observePRStateActivity,
 } from './github';
+export type {
+  PRInfo,
+  CIResult,
+  ObservePRStateOutput,
+  PRLifecycleState,
+} from './github';
+export type { CheckConflictOutput } from './git';
 export { codexActivity } from './codex';
 export type { CodexInput, CodexOutput } from './codex';
+export { consultAdvisorActivity } from './advisor';
+export type {
+  ConsultAdvisorInput,
+  ConsultAdvisorOutput,
+  AdvisorVerdict,
+} from './advisor';
 export {
   extractContextArtifactActivity,
   planActivity,

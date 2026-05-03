@@ -12,6 +12,14 @@ Temporal Schedule ──▶ periodicRefactorWorkflow ──▶ robustPRMergeWork
 - **定期リファクタ**: Schedule で起動 → codex がコードを解析・適用 → PR → 自動 CI 修復 → マージ。
 - **CI 自己修復ループ**: `gh run view --log-failed` を codex に渡して fix → push → 再度 CI 待機。
 - **コンフリクト解消ループ**: `git merge --no-commit` でトライアル → codex で解消 → push → CI へ戻る。
+- **外部干渉に強い**: CI 待機中に PR が外部で close / merge されても throw せず正常終了。
+  別 PR が先に merge されたケースは workflow 内で短絡する。
+- **Advisor (上位モデル相談)**: 2 回目以降の self-heal や no-diff の場面で `ADVISOR_MODEL`
+  に問い合わせ、`{verdict: retry|abort|change-strategy}` を取得。abort なら早期停止。
+  入力は事前に集約したサマリー（≤ 2 KiB）で、tokens は最小限。`maxAdvisorConsults`
+  （既定 2）でハードキャップ。設定なしなら codex のデフォルトモデルを使う。
+- **post-merge ポーリング**: `gh pr merge --auto` の "merge 要求" と "実際の merge 完了"
+  を区別。observe で MERGED が見えるまでポーリングし、見えなければ `merge-queued` を返す。
 
 > Issue 駆動ルートと Claude 連携はいったん外しています。
 > 復活させるときは `robustPRMergeWorkflow` を子として再利用すれば容易に追加可能。

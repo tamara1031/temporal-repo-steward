@@ -28,7 +28,11 @@ const baseInput = {
 async function runWith(
   taskQueueName: string,
   acts: Parameters<typeof makeMockActivities>[0],
-  input: Partial<typeof baseInput> & { maxFixIterations?: number } = {},
+  input: Partial<typeof baseInput> & {
+    maxFixIterations?: number;
+    postMergePollAttempts?: number;
+    postMergePollIntervalMs?: number;
+  } = {},
 ) {
   const { activities, calls } = makeMockActivities(acts);
   const worker = await Worker.create({
@@ -47,10 +51,13 @@ async function runWith(
 }
 
 describe('robustPRMergeWorkflow', () => {
-  it('happy path: push → createPR → CI green → no conflict → merge', async () => {
+  it('happy path: push → createPR → CI green → no conflict → merge → observe MERGED', async () => {
     const { result, calls } = await runWith('pr-happy', {});
     expect((result as any).prNumber).toBe(42);
     expect((result as any).iterations).toBe(0);
+    expect((result as any).merged).toBe(true);
+    expect((result as any).outcome).toBe('merged');
+    expect((result as any).advisorConsults).toBe(0);
 
     const names = calls.log.map((c) => c.name);
     expect(names).toEqual([
@@ -59,7 +66,62 @@ describe('robustPRMergeWorkflow', () => {
       'waitForCIActivity',
       'checkConflictActivity',
       'mergePRActivity',
+      'observePRStateActivity', // post-merge poll
     ]);
+  });
+
+  it('reports merge-queued when post-merge poll never sees MERGED', async () => {
+    const { result, calls } = await runWith(
+      'pr-merge-queued',
+      {
+        observePRStateActivity: async () => ({ state: 'OPEN' as const }),
+      },
+      { postMergePollAttempts: 3, postMergePollIntervalMs: 1 },
+    );
+    expect((result as any).merged).toBe(false);
+    expect((result as any).outcome).toBe('merge-queued');
+    expect(calls.log.filter((c) => c.name === 'observePRStateActivity').length).toBe(3);
+  });
+
+  it('returns closed-externally without throwing when CI loop sees PR closed', async () => {
+    const { result } = await runWith('pr-closed-external', {
+      waitForCIActivity: async () => ({
+        status: 'closed' as const,
+        failedRunIds: [],
+        failedJobNames: [],
+      }),
+    });
+    expect((result as any).outcome).toBe('closed-externally');
+    expect((result as any).merged).toBe(false);
+  });
+
+  it('returns merged-externally when CI loop observes external merge', async () => {
+    const { result } = await runWith('pr-merged-external', {
+      waitForCIActivity: async () => ({
+        status: 'merged' as const,
+        failedRunIds: [],
+        failedJobNames: [],
+      }),
+    });
+    expect((result as any).outcome).toBe('merged-externally');
+    expect((result as any).merged).toBe(true);
+  });
+
+  it('aborts when advisor returns abort on the 2nd self-heal', async () => {
+    let advisorCalled = 0;
+    const { result } = await runWith('pr-advisor-abort', {
+      waitForCIActivity: async () => ({
+        status: 'failure' as const,
+        failedRunIds: ['1'],
+        failedJobNames: ['ci'],
+      }),
+      consultAdvisorActivity: async () => {
+        advisorCalled += 1;
+        return { verdict: 'abort' as const, rationale: 'structural failure' };
+      },
+    });
+    expect(result).toBeInstanceOf(WorkflowFailedError);
+    expect(advisorCalled).toBe(1);
   });
 
   it('CI failure → self-heal once → CI green → merge', async () => {

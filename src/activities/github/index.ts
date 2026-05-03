@@ -15,6 +15,13 @@ export type { FetchFailedLogsInput } from './fetch-failed-logs';
 export { mergePRActivity } from './merge-pr';
 export type { MergePRInput } from './merge-pr';
 
+export { observePRStateActivity, parsePRStateJSON } from './observe-pr-state';
+export type {
+  ObservePRStateInput,
+  ObservePRStateOutput,
+  PRLifecycleState,
+} from './observe-pr-state';
+
 // Internal helpers re-exported for the rare consumer that needs them
 // (e.g. tests parsing rollup JSON). NOT re-exported from the activities barrel.
 export {

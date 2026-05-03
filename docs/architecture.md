@@ -38,7 +38,11 @@ src/activities/
 ├── index.ts                       # Worker が登録する Activity の barrel
 ├── _internal/                     # クラスタ横断の共有ヘルパー (非 Activity)
 │   ├── exec.ts                    # 子プロセス起動 (heartbeat + cancellation)
-│   └── run-codex.ts               # `codex exec` ラッパ + 429 検知
+│   └── run-codex.ts               # `codex exec` ラッパ + 429 検知 (sandbox 切替対応)
+│
+├── advisor/                       # 上位モデル相談 (read-only sandbox)
+│   ├── index.ts
+│   └── advisor.ts                 # consultAdvisorActivity
 │
 ├── codex/                         # 汎用シングルショット codex
 │   ├── index.ts
@@ -66,9 +70,10 @@ src/activities/
 │   │   ├── ci-rollup.ts           # statusCheckRollup の解釈
 │   │   └── pr-view.ts             # gh pr view の戻り値パース
 │   ├── create-pr.ts               # createPRActivity
-│   ├── wait-for-ci.ts             # waitForCIActivity
+│   ├── wait-for-ci.ts             # waitForCIActivity (state も同時取得)
 │   ├── fetch-failed-logs.ts       # fetchFailedRunLogsActivity
-│   └── merge-pr.ts                # mergePRActivity
+│   ├── merge-pr.ts                # mergePRActivity (--auto)
+│   └── observe-pr-state.ts        # observePRStateActivity (post-merge poll)
 │
 └── refactor/                      # codex の役割別 Activity
     ├── index.ts
@@ -192,21 +197,53 @@ flowchart TD
     Push --> Create[createPRActivity]
     Create --> Wait[waitForCIActivity]
     Wait -->|success| Conflict[checkConflictActivity]
-    Wait -->|failure| Fetch[fetchFailedRunLogsActivity]
+    Wait -->|failure| AdviseFail{"iter ≥ 2?<br/>consult advisor"}
     Wait -->|timeout| Timeout([throw CITimeout])
+    Wait -->|closed externally| ClosedExt([return closed-externally]):::ret
+    Wait -->|merged externally| MergedExt([return merged-externally]):::ret
+    AdviseFail -->|verdict=abort| AbortAdv([throw AdvisorAbort])
+    AdviseFail -->|verdict=retry / change| Fetch[fetchFailedRunLogsActivity]
     Fetch --> Heal["heavyCodex.codexActivity<br/>(CI self-heal)"]
     Heal --> CommitH[commitAllActivity]
-    CommitH --> PushH[pushBranchActivity]
+    CommitH -->|committed=false| AdviseNoDiff{"consult advisor<br/>(if budget)"}
+    AdviseNoDiff --> ThrowNoDiff([throw NoFixDiff])
+    CommitH -->|committed=true| PushH[pushBranchActivity]
     PushH --> Wait
-    Conflict -->|noConflict| Merge[mergePRActivity]
+    Conflict -->|noConflict| MergeReq[mergePRActivity<br/>--auto]
     Conflict -->|conflict| Resolve["heavyCodex.codexActivity<br/>(conflict resolve)"]
     Resolve --> CommitR[commitAllActivity]
     CommitR --> PushR[pushBranchActivity]
     PushR --> Wait
-    Merge --> Done([return prInfo])
+    MergeReq --> Poll["pollUntilMerged<br/>(observePRStateActivity ×N)"]
+    Poll -->|MERGED observed| RetMerged([return merged]):::ret
+    Poll -->|exhausted polls| RetQueued([return merge-queued]):::ret
+    Poll -->|CLOSED after merge req| ThrowAbandon([throw MergeAbandoned])
+
+    classDef ret fill:#dff,stroke:#06a,color:#024
 ```
 
 `maxFixIterations` に達するまで CI 失敗・コンフリクトを修復する。
+Advisor は `maxAdvisorConsults`（既定 2）が上限。各 advisor 呼び出しは
+事前に集約済みのサマリー（≤ 2 KiB）のみを上位モデルに渡し、`{verdict, rationale, suggestedAction}`
+を返す。verdict が `abort` のときのみ workflow を停止し、`retry` / `change-strategy`
+は次の self-heal を続行する（提案は PR body・ログに記録）。
+
+#### 新しい終了ステータス
+
+`RobustPRMergeOutput.outcome` で `gh pr merge --auto` の挙動と外部干渉を区別する:
+
+| outcome | 意味 | merged フラグ |
+| --- | --- | --- |
+| `merged` | merge が実際に landed（`mergedAt` を観測） | true |
+| `merge-queued` | gh が `--auto` を受理したが、protection の up-to-date 待ちなど未完了 | false |
+| `auto-merge-disabled` | 呼び出し側が `autoMerge=false` で停止 | false |
+| `closed-externally` | 別 PR / 人間が PR を Close した | false |
+| `merged-externally` | base force-push や手動 merge で観測 MERGED | true |
+
+`closed-externally` / `merged-externally` は throw せず正常終了する。CI 待機中に
+`gh pr view --json state` で OPEN/CLOSED/MERGED を毎ポーリング読み取り、
+状態遷移を early-exit に変換することで「自分の PR より先に他の PR が merge された」
+ケースを安全に処理する。
 
 ---
 
@@ -219,6 +256,7 @@ flowchart TD
 | `contextCodex` / `planCodex` / `reviewCodex` | 5m | 5回, exp ×3, max 10m | codex 役割活動 (短時間) |
 | `implementCodex` | 30m | 5回, exp ×3, max 10m | codex 役割活動 (実装、長時間) |
 | `heavyCodex` | 90m | 5回, exp ×3, max 10m | pr-lifecycle の CI 自己修復・コンフリクト解消 |
+| `advisor` | 4m | 3回, exp ×2, max 2m | consultAdvisorActivity (上位モデル相談) |
 | `ciWait` | 70m | 3回 | waitForCIActivity (heartbeat + ポーリング) |
 
 LLM 系 proxy は全て `codexQuotaFriendlyRetry` を共有し、429 / quota 系エラーを
