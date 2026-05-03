@@ -61,7 +61,32 @@ export interface ReportInput {
   designRecord?: DesignPhaseRecord;
 }
 
+interface ReportAccounting {
+  plannerStepCount: number;
+  renderedSteps: StepRecord[];
+  droppedSteps: PlanStep[];
+  stepCap: number;
+}
+
+function computeReportAccounting(r: ReportInput): ReportAccounting {
+  return {
+    plannerStepCount: r.plan.steps.length,
+    renderedSteps: r.stepRecords,
+    droppedSteps: r.droppedFromPlan,
+    stepCap: r.stepCap,
+  };
+}
+
+function shouldRenderStepCapSection(a: ReportAccounting): boolean {
+  return a.droppedSteps.length > 0;
+}
+
+function renderStepCapSummary(a: ReportAccounting): string {
+  return `Planner returned ${a.plannerStepCount} steps; cap is ${a.stepCap}. Dropped:`;
+}
+
 export function renderReport(r: ReportInput): string {
+  const accounting = computeReportAccounting(r);
   const lines: string[] = [];
   lines.push('## Theme and intent');
   lines.push(`**${r.plan.theme}** — ${r.plan.rationale}`);
@@ -92,7 +117,7 @@ export function renderReport(r: ReportInput): string {
     lines.push('');
   }
   lines.push('## Step outcomes');
-  for (const rec of r.stepRecords) {
+  for (const rec of accounting.renderedSteps) {
     lines.push(`### Step: ${rec.step.title} — ${rec.outcome} (${rec.iters} iter)`);
     lines.push(rec.step.description);
     lines.push('');
@@ -127,12 +152,10 @@ export function renderReport(r: ReportInput): string {
       lines.push('');
     }
   }
-  if (r.droppedFromPlan.length > 0) {
+  if (shouldRenderStepCapSection(accounting)) {
     lines.push('## ⚠️ Dropped by step cap');
-    lines.push(
-      `Planner returned ${r.droppedFromPlan.length + r.stepRecords.length} steps; cap is ${r.stepCap}. Dropped:`,
-    );
-    for (const s of r.droppedFromPlan) lines.push(`- ${s.title}`);
+    lines.push(renderStepCapSummary(accounting));
+    for (const s of accounting.droppedSteps) lines.push(`- ${s.title}`);
     lines.push('');
   }
   lines.push('## Spawn budget');
