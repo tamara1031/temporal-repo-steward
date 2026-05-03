@@ -1,0 +1,186 @@
+name: Release
+
+# Manual release workflow:
+#   1. Auto-increments the next semver tag from the latest stable GitHub
+#      Release using the `bump` pulldown (patch / minor / major). When no prior
+#      stable release exists, the baseline is v0.0.0 (so `patch` → v0.0.1,
+#      `minor` → v0.1.0, `major` → v1.0.0).
+#   2. Builds the Worker Docker image once and pushes to GHCR with:
+#        :<version>  immutable, e.g. ghcr.io/<owner>/<repo>:v1.2.3
+#        :latest     moving — pinned to the most recent stable release only
+#                    (pre-releases via `version_override` do NOT bump :latest)
+#   3. Creates a GitHub Release on `target_sha` after the push succeeds.
+#
+# Single-workflow design: a release-event-triggered image build would NOT fire
+# when `gh release create` runs under GITHUB_TOKEN (GitHub's recursive-trigger
+# guard). Building inline avoids needing a PAT secret. Image-push happens
+# BEFORE release creation so a failed push never leaves an orphan release.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump applied to the latest stable release'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      version_override:
+        description: 'Optional explicit version (e.g. v1.2.3-rc.1 for a pre-release). When set, overrides `bump`.'
+        required: false
+        type: string
+      target_sha:
+        description: 'Commit SHA to release. Defaults to the workflow ref HEAD.'
+        required: false
+        type: string
+
+permissions:
+  contents: write   # create the git tag + GitHub Release
+  packages: write   # push to GHCR
+
+# Serialize releases — never abandon a half-pushed image.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve target SHA
+        id: target
+        run: |
+          sha='${{ inputs.target_sha }}'
+          if [ -z "$sha" ]; then sha='${{ github.sha }}'; fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Releasing $sha"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          # `gh release create --generate-notes` scans commit history.
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: bumper
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          override='${{ inputs.version_override }}'
+          bump='${{ inputs.bump }}'
+
+          if [ -n "$override" ]; then
+            v="$override"
+            echo "Using version_override: $v"
+          else
+            # Latest stable release = baseline. Pre-releases are excluded so a
+            # `v1.2.3-rc.1` doesn't accidentally promote to `v1.2.4`.
+            latest=$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')
+            if [ -z "$latest" ]; then
+              major=0; minor=0; patch=0
+              echo "No prior stable release; baseline = 0.0.0"
+            else
+              echo "Latest stable release: $latest"
+              clean="${latest#v}"
+              if ! echo "$clean" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "::error::Latest stable tag $latest is not plain semver (M.m.p); can't auto-bump. Use version_override."
+                exit 1
+              fi
+              IFS='.' read -r major minor patch <<< "$clean"
+            fi
+            case "$bump" in
+              major) major=$((major+1)); minor=0; patch=0 ;;
+              minor) minor=$((minor+1)); patch=0 ;;
+              patch) patch=$((patch+1)) ;;
+              *) echo "::error::Unknown bump: $bump"; exit 1 ;;
+            esac
+            v="v${major}.${minor}.${patch}"
+            echo "Bumped $bump: $v"
+          fi
+
+          # Final format check covers both override and bump paths.
+          if ! echo "$v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+            echo "::error::Computed version $v does not match v<major>.<minor>.<patch>[-prerelease]"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse if tag already exists
+        run: |
+          v='${{ steps.bumper.outputs.version }}'
+          if git rev-parse -q --verify "refs/tags/$v" > /dev/null 2>&1; then
+            echo "::error::Tag $v already exists locally"; exit 1
+          fi
+          if git ls-remote --tags origin "$v" | grep -qE "refs/tags/$v$"; then
+            echo "::error::Tag $v already exists on origin"; exit 1
+          fi
+
+      - name: Compute image tags
+        id: img
+        run: |
+          name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          v='${{ steps.bumper.outputs.version }}'
+          # Move :latest only for stable releases — pre-releases (v1.2.3-rc.1)
+          # publish their immutable tag but never become the default pull.
+          if echo "$v" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            tags="$name:$v,$name:latest"
+            stable=true
+          else
+            tags="$name:$v"
+            stable=false
+          fi
+          {
+            echo "name=$name"
+            echo "tags=$tags"
+            echo "stable=$stable"
+          } >> "$GITHUB_OUTPUT"
+          echo "Will publish: $tags"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.img.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release (auto-creates the git tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v='${{ steps.bumper.outputs.version }}'
+          # `--prerelease` flag mirrors the :latest gating above so the release
+          # listing matches the image tag intent.
+          if [ '${{ steps.img.outputs.stable }}' = 'true' ]; then
+            prerelease_flag=''
+          else
+            prerelease_flag='--prerelease'
+          fi
+          gh release create "$v" \
+            --target '${{ steps.target.outputs.sha }}' \
+            --title "$v" \
+            --generate-notes \
+            $prerelease_flag
+
+      - name: Summary
+        run: |
+          echo "### Released \`${{ steps.bumper.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bump: \`${{ inputs.bump }}\`${{ inputs.version_override && ' (overridden)' || '' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Target: \`${{ steps.target.outputs.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Images: \`${{ steps.img.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stable: \`${{ steps.img.outputs.stable }}\`" >> "$GITHUB_STEP_SUMMARY"
