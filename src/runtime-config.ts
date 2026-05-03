@@ -16,6 +16,7 @@ export interface TemporalRuntimeConfig {
   address: string;
   namespace: string;
   taskQueue: string;
+  tls: boolean;
 }
 
 export interface WorkerRuntimeConfig extends TemporalRuntimeConfig {
@@ -31,6 +32,7 @@ export function loadTemporalRuntimeConfig(
     address: env.TEMPORAL_ADDRESS ?? 'localhost:7233',
     namespace: env.TEMPORAL_NAMESPACE ?? 'default',
     taskQueue: env.TEMPORAL_TASK_QUEUE ?? TASK_QUEUE,
+    tls: env.TEMPORAL_TLS === 'true',
   };
 }
 
@@ -39,7 +41,6 @@ export function loadWorkerRuntimeConfig(
 ): WorkerRuntimeConfig {
   return {
     ...loadTemporalRuntimeConfig(env),
-    tls: env.TEMPORAL_TLS === 'true',
     maxConcurrentActivityTaskExecutions: parsePositiveIntegerEnv(
       'TEMPORAL_MAX_CONCURRENT_ACTIVITIES',
       env.TEMPORAL_MAX_CONCURRENT_ACTIVITIES,

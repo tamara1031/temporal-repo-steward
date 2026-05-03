@@ -11,6 +11,7 @@ describe('runtime config', () => {
       address: 'localhost:7233',
       namespace: 'default',
       taskQueue: TASK_QUEUE,
+      tls: false,
     });
   });
 
@@ -20,13 +21,24 @@ describe('runtime config', () => {
         TEMPORAL_ADDRESS: 'temporal.example:7233',
         TEMPORAL_NAMESPACE: 'repo-steward',
         TEMPORAL_TASK_QUEUE: 'custom-queue',
+        TEMPORAL_TLS: 'true',
       }),
     ).toEqual({
       address: 'temporal.example:7233',
       namespace: 'repo-steward',
       taskQueue: 'custom-queue',
+      tls: true,
     });
   });
+
+  it.each([undefined, 'false', 'TRUE', '1', 'yes', ''])(
+    'uses tls false unless TEMPORAL_TLS is exactly true (%s)',
+    (value) => {
+      expect(loadTemporalRuntimeConfig({ TEMPORAL_TLS: value })).toMatchObject({
+        tls: false,
+      });
+    },
+  );
 
   it('uses worker defaults when worker-only env vars are unset', () => {
     expect(loadWorkerRuntimeConfig({})).toMatchObject({

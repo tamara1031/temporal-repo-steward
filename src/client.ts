@@ -41,6 +41,7 @@ async function main(): Promise<void> {
   const config = loadTemporalRuntimeConfig();
   const connection = await Connection.connect({
     address: config.address,
+    tls: config.tls,
   });
   const client = new Client({
     connection,
