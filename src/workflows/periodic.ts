@@ -6,10 +6,11 @@ import {
   ChildWorkflowCancellationType,
   ParentClosePolicy,
 } from '@temporalio/workflow';
-import { cheap, heavy, contextCodex, planCodex } from './proxies';
+import { cheap, heavy, contextCodex } from './proxies';
 import { robustPRMergeWorkflow } from './pr-lifecycle';
 import { refactorStepWorkflow } from './refactor-step';
-import type { ContextArtifact, PlanOutput } from '../activities/refactor';
+import { designPhaseWorkflow, DEFAULT_DESIGN_PHASE_CONFIG } from './design-phase';
+import type { ContextArtifact } from '../activities/refactor';
 import { AdvisorBudget, type AdvisorAuditEntry } from './_internal/advisor';
 import { renderReport, type StepRecord } from './_internal/refactor-report';
 import { DEFAULT_PERIODIC_SPAWN_CAP, SpawnCounter } from './_internal/spawn-budget';
@@ -97,25 +98,37 @@ export async function periodicRefactorWorkflow(
       generatedAt,
     });
 
-    // ── Phase 1. Plan ────────────────────────────────────────────────────
-    let plan: PlanOutput;
-    try {
-      spawnCounter.consume('planner', 1);
-      plan = await planCodex.planActivity({
-        workdir,
-        contextArtifact,
-        brief: input.refactorBrief,
-      });
-    } catch (err) {
-      log.warn('planner failed; producing plan-failed report', { err: String(err) });
-      return { skipped: 'plan-failed' };
+    // ── Phase 1. Design ──────────────────────────────────────────────────
+    // Runs the planner + optional Design Parliament (plan review + refinement
+    // rounds) as a child workflow. The child gets a capped budget slice; we
+    // reconcile its spawn counts back onto our counter afterward.
+    const designBudget = Math.min(8, spawnCounter.remaining());
+    const designOutput = await executeChild(designPhaseWorkflow, {
+      args: [
+        {
+          workdir,
+          contextArtifact,
+          brief: input.refactorBrief,
+          spawnBudget: designBudget,
+          config: DEFAULT_DESIGN_PHASE_CONFIG,
+        },
+      ],
+      workflowId: `design-phase-${info.workflowId}`.replace(/:/g, '-'),
+    });
+    for (const [role, n] of Object.entries(designOutput.spawnCounts)) {
+      spawnCounter.consume(role, n);
     }
 
-    if (plan.theme === 'no-op' || plan.steps.length === 0) {
-      log.info('planner returned no-op; skipping refactor', { theme: plan.theme });
+    if (designOutput.outcome === 'plan-failed' || designOutput.outcome === 'budget-exhausted') {
+      log.warn('design phase failed; skipping refactor', { outcome: designOutput.outcome });
+      return { skipped: 'plan-failed' };
+    }
+    if (designOutput.outcome === 'no-op') {
+      log.info('design phase returned no-op; skipping refactor');
       return { skipped: 'no-op-plan' };
     }
 
+    const plan = designOutput.plan!;
     const plannedSteps = plan.steps.slice(0, MAX_STEPS);
     const droppedFromPlan = plan.steps.slice(MAX_STEPS);
 
@@ -192,6 +205,7 @@ export async function periodicRefactorWorkflow(
       branch,
       advisorAudits,
       stepCap: MAX_STEPS,
+      designRecord: designOutput.designRecord,
     });
 
     await heavy.commitAllActivity({

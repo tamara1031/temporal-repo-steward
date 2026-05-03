@@ -58,6 +58,8 @@ export {
   planActivity,
   implementActivity,
   reviewActivity,
+  reviewPlanActivity,
+  refinePlanActivity,
 } from './refactor';
 export type {
   ContextArtifact,
@@ -70,4 +72,10 @@ export type {
   ReviewInput,
   ReviewOutput,
   ReviewConcern,
+  ReviewPlanInput,
+  PlanReviewOutput,
+  PlanReviewConcern,
+  RefinePlanInput,
+  DesignRound,
+  DesignPhaseRecord,
 } from './refactor';

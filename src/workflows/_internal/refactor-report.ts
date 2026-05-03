@@ -11,6 +11,7 @@
  * `string`; safe to import from any workflow file.
  */
 import type {
+  DesignPhaseRecord,
   PlanOutput,
   PlanStep,
   ReviewConcern,
@@ -56,6 +57,8 @@ export interface ReportInput {
    * can describe the truncation precisely without re-importing the constant.
    */
   stepCap: number;
+  /** Design parliament rounds, if any ran. */
+  designRecord?: DesignPhaseRecord;
 }
 
 export function renderReport(r: ReportInput): string {
@@ -63,6 +66,23 @@ export function renderReport(r: ReportInput): string {
   lines.push('## Theme and intent');
   lines.push(`**${r.plan.theme}** — ${r.plan.rationale}`);
   lines.push('');
+  if (r.designRecord && r.designRecord.rounds.length > 0) {
+    lines.push('## Design parliament');
+    lines.push(`Outcome: \`${r.designRecord.outcome}\` (${r.designRecord.iters} round(s))`);
+    for (const round of r.designRecord.rounds) {
+      lines.push(`### Round ${round.iter}`);
+      for (const rv of round.reviews) {
+        const tag = `[${rv.concern}: ${rv.verdict}]`;
+        if (rv.bullets.length === 0) {
+          lines.push(`- ${tag} (no findings)`);
+        } else {
+          lines.push(`- ${tag}`);
+          for (const b of rv.bullets) lines.push(`  - ${b}`);
+        }
+      }
+    }
+    lines.push('');
+  }
   if (r.circuitBroken) {
     lines.push('## ⛔ Circuit breaker fired');
     lines.push(

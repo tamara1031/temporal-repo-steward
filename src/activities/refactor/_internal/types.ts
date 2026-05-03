@@ -40,3 +40,22 @@ export interface ReviewOutput {
   blocking_issues: string[];
   suggestions: string[];
 }
+
+export type PlanReviewConcern = 'feasibility' | 'scope';
+
+export interface PlanReviewOutput {
+  verdict: 'ok' | 'needs_revision';
+  blocking_issues: string[];
+  suggestions: string[];
+}
+
+export interface DesignRound {
+  iter: number;
+  reviews: { concern: PlanReviewConcern; verdict: PlanReviewOutput['verdict']; bullets: string[] }[];
+}
+
+export interface DesignPhaseRecord {
+  rounds: DesignRound[];
+  outcome: 'converged' | 'single-shot' | 'dropped-no-progress' | 'max-rounds';
+  iters: number;
+}

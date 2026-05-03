@@ -6,7 +6,7 @@
 
 import { ApplicationFailure, log } from '@temporalio/activity';
 import { extractJsonObject } from '../../_internal/json-extract';
-import type { ContextArtifact, PlanOutput, PlanStep, ReviewConcern, ReviewOutput } from './types';
+import type { ContextArtifact, PlanOutput, PlanStep, PlanReviewConcern, PlanReviewOutput, ReviewConcern, ReviewOutput } from './types';
 
 export function parseContextOutput(text: string): Omit<ContextArtifact, 'generatedAt'> {
   const json = extractJsonObject(text);
@@ -63,6 +63,32 @@ function normalizeStep(raw: unknown): PlanStep | undefined {
     : [];
   if (!title || !description || reqs.length === 0) return undefined;
   return { title, description, critical_requirements: reqs };
+}
+
+export function parsePlanReviewOutput(text: string, concern: PlanReviewConcern): PlanReviewOutput {
+  const json = extractJsonObject(text);
+  if (!json) {
+    log.warn(`plan-reviewer-${concern} produced unparseable output; coercing to needs_revision`, {
+      preview: text.slice(0, 200),
+    });
+    return {
+      verdict: 'needs_revision',
+      blocking_issues: [`plan-reviewer-${concern} returned non-JSON: ${text.slice(0, 200)}`],
+      suggestions: [],
+    };
+  }
+  const verdict = ((): PlanReviewOutput['verdict'] => {
+    const v = json.verdict;
+    if (v === 'ok' || v === 'needs_revision') return v;
+    return 'needs_revision';
+  })();
+  const blocking = Array.isArray(json.blocking_issues)
+    ? (json.blocking_issues as unknown[]).filter((x): x is string => typeof x === 'string')
+    : [];
+  const suggestions = Array.isArray(json.suggestions)
+    ? (json.suggestions as unknown[]).filter((x): x is string => typeof x === 'string')
+    : [];
+  return { verdict, blocking_issues: blocking, suggestions };
 }
 
 export function parseReviewOutput(text: string, concern: ReviewConcern): ReviewOutput {

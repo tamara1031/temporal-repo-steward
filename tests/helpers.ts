@@ -133,6 +133,22 @@ export function makeMockActivities(
     restoreActivity: record('restoreActivity', async () => undefined),
     snapshotWorkdirActivity: record('snapshotWorkdirActivity', async () => ({ snapped: false })),
     popWorkdirSnapshotActivity: record('popWorkdirSnapshotActivity', async () => undefined),
+    reviewPlanActivity: record('reviewPlanActivity', async () => ({
+      verdict: 'ok' as const,
+      blocking_issues: [],
+      suggestions: [],
+    })),
+    refinePlanActivity: record('refinePlanActivity', async () => ({
+      theme: 'tighten module boundaries',
+      rationale: 'reduces inter-module coupling',
+      steps: [
+        {
+          title: 'extract shared types',
+          description: 'move shared interfaces into a dedicated module',
+          critical_requirements: ['all existing unit tests still pass'],
+        },
+      ],
+    })),
   };
 
   const merged: typeof activities = { ...defaults } as unknown as typeof activities;

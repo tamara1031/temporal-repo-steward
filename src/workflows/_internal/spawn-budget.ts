@@ -14,11 +14,13 @@
 /**
  * Default spawn cap for `periodicRefactorWorkflow`.
  *
- * Worst-case spawns under the current orchestrator: 1 context-extractor +
- * 1 planner + 2 steps × 2 iter × (1 implementer + 2 reviewers) = 14. Cap
- * of 16 leaves a 2-spawn retry buffer for transient failures.
+ * Worst-case spawns with the design parliament (maxRounds=1):
+ *   1 context + (1 planner + 2 reviewers + 1 refiner) design
+ *   + 2 steps × 2 iter × (1 implementer + 2 reviewers) = 17.
+ * Cap of 22 leaves a 5-spawn retry buffer for transient failures or an
+ * optional second design round.
  */
-export const DEFAULT_PERIODIC_SPAWN_CAP = 16;
+export const DEFAULT_PERIODIC_SPAWN_CAP = 22;
 
 export class SpawnCounter {
   private readonly counts: Record<string, number> = {};

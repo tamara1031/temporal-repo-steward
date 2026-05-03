@@ -24,10 +24,20 @@ export type { ImplementInput, ImplementOutput } from './implement';
 export { reviewActivity } from './review';
 export type { ReviewInput } from './review';
 
+export { reviewPlanActivity } from './review-plan';
+export type { ReviewPlanInput } from './review-plan';
+
+export { refinePlanActivity } from './refine-plan';
+export type { RefinePlanInput } from './refine-plan';
+
 export type {
   ContextArtifact,
   PlanOutput,
   PlanStep,
   ReviewConcern,
   ReviewOutput,
+  PlanReviewConcern,
+  PlanReviewOutput,
+  DesignRound,
+  DesignPhaseRecord,
 } from './_internal/types';

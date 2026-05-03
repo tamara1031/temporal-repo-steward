@@ -24,7 +24,7 @@
  * (tests, activities). Workflow code never imports this file directly.
  */
 
-import type { ContextArtifact, PlanStep, ReviewConcern } from './types';
+import type { ContextArtifact, PlanOutput, PlanReviewConcern, PlanStep, ReviewConcern } from './types';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Static-preamble helpers (identical bytes across plan/implement/review for
@@ -138,6 +138,96 @@ Output: reply with a concise markdown report (the workflow stores this verbatim)
 
 ## Notes
 - anything reviewers should focus on, including any **discretionary fill-ins** (decisions you made beyond the step description)`;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Plan reviewer prompt (parametric on PlanReviewConcern)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface PlanConcernSpec {
+  label: string;
+  checklist: string[];
+  out_of_scope_reminder: string;
+}
+
+const PLAN_CONCERN_SPECS: Record<PlanReviewConcern, PlanConcernSpec> = {
+  feasibility: {
+    label: 'feasibility — whether the plan can be executed in this environment',
+    checklist: [
+      'Each step only modifies the working tree; no network access (npm install, curl, etc.) required to implement it',
+      'Files/modules/APIs referenced in descriptions are plausible given the ContextArtifact',
+      'Each `critical_requirement` can be verified with commands available in the repo (npm test, tsc --noEmit, lint scripts, etc.)',
+      'Steps are scoped realistically for one implementer session — not so broad they would require multiple large refactors',
+      'No step implicitly depends on output from a future step (ordering is feasible as written)',
+    ],
+    out_of_scope_reminder:
+      "Do not comment on naming quality, cohesion, or decomposition style — that is the `scope` reviewer's territory.",
+  },
+  scope: {
+    label: 'scope — theme cohesion and step decomposition quality',
+    checklist: [
+      'Steps form a coherent, high-cohesion theme — not a grab-bag of unrelated improvements',
+      'Each step is independently reviewable (could land as a standalone diff)',
+      'Descriptions are specific enough to guide an implementer without ambiguity',
+      'Decomposition is appropriate: not so fine-grained steps are trivial, nor so coarse one step conflates multiple distinct changes',
+      '`rationale` explains the value delivered, not just restates the theme',
+      'The theme is not "no-op" masquerading as a real improvement',
+    ],
+    out_of_scope_reminder:
+      "Do not comment on feasibility, environment constraints, or whether commands exist — that is the `feasibility` reviewer's territory.",
+  },
+};
+
+function planReviewerStaticBody(concern: PlanReviewConcern): string {
+  const spec = PLAN_CONCERN_SPECS[concern];
+  return `## Role: Design Parliament Member (concern = ${spec.label})
+
+Hard rules (in addition to the global rules above):
+- **READ-ONLY.** Do not modify any files.
+- ${spec.out_of_scope_reminder}
+- **No filler.** Do not write "I'll review this", "Looks good", or any acknowledgment. The very first character of your reply MUST be \`{\`.
+- One bullet per concrete issue. Do not pad with restatements of the plan.
+
+Concern checklist (your scope, exhaustively):
+${spec.checklist.map((c) => `- ${c}`).join('\n')}
+
+Output: EXACTLY one JSON object, nothing else. Schema:
+{
+  "verdict": "ok" | "needs_revision",
+  "blocking_issues": [string, ...],
+  "suggestions": [string, ...]
+}
+
+Verdict semantics:
+- \`needs_revision\`: real issues that should be addressed before implementation begins.
+- \`ok\`: the plan looks sound from the ${concern} angle.`;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Plan refiner prompt
+// ──────────────────────────────────────────────────────────────────────────
+
+const REFINE_PLAN_STATIC_BODY = `## Role: Plan Refiner
+You receive a refactor plan and consolidated feedback from design reviewers. Produce an improved plan.
+
+Hard rules (in addition to the global rules above):
+- Read-only. Do not modify any files.
+- Address every item listed under **blocking issues** in the feedback.
+- Do NOT change the theme unless the feedback explicitly identifies the theme as wrong or infeasible.
+- Preserve steps that received no criticism; only revise or split steps that were flagged.
+- **No filler.** The very first character of your reply MUST be \`{\`. No markdown fences.
+
+Output: EXACTLY one JSON object with the same schema as the planner:
+{
+  "theme": string,
+  "rationale": string,
+  "steps": [
+    {
+      "title": string,
+      "description": string,
+      "critical_requirements": [string, ...]
+    }
+  ]
+}`;
 
 // ──────────────────────────────────────────────────────────────────────────
 // Reviewer prompt (parametric on concern)
@@ -276,9 +366,42 @@ ${diff}
   return compose(ctx, reviewerStaticBody(concern), dynamic);
 };
 
+const REVIEW_PLAN_PROMPT = (ctx: ContextArtifact, concern: PlanReviewConcern, plan: PlanOutput): string => {
+  const planBlock = JSON.stringify(plan, null, 2);
+  const dynamic = `## Dynamic input (this round)
+### Plan under review
+\`\`\`json
+${planBlock}
+\`\`\``;
+  return compose(ctx, planReviewerStaticBody(concern), dynamic);
+};
+
+const REFINE_PLAN_PROMPT = (
+  ctx: ContextArtifact,
+  plan: PlanOutput,
+  feedback: string[],
+): string => {
+  const planBlock = JSON.stringify(plan, null, 2);
+  const feedbackBlock =
+    feedback.length === 0
+      ? '(no feedback — accept plan as-is)'
+      : feedback.map((f) => `- ${f}`).join('\n');
+  const dynamic = `## Dynamic input (this round)
+### Current plan
+\`\`\`json
+${planBlock}
+\`\`\`
+
+### Reviewer feedback to address
+${feedbackBlock}`;
+  return compose(ctx, REFINE_PLAN_STATIC_BODY, dynamic);
+};
+
 export const PROMPTS = {
   context: (): string => CONTEXT_PROMPT,
   plan: PLAN_PROMPT,
   implement: IMPLEMENT_PROMPT,
   review: REVIEW_PROMPT,
+  reviewPlan: REVIEW_PLAN_PROMPT,
+  refinePlan: REFINE_PLAN_PROMPT,
 };
