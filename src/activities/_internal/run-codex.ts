@@ -25,12 +25,6 @@ export interface CodexRunInput {
   timeoutMs: number;
   /** Optional model override (otherwise uses codex's default). */
   model?: string;
-  /**
-   * Sandbox profile passed to codex. `workspace-write` (default) lets codex
-   * edit the working tree; `read-only` is for advisory roles that should never
-   * mutate state — they observe and return a verdict.
-   */
-  sandbox?: 'workspace-write' | 'read-only';
 }
 
 export interface CodexRunOutput {
@@ -62,8 +56,17 @@ async function ensureCodexAuth(): Promise<void> {
 /**
  * Run `codex exec` once with the given prompt. Returns the structured outputs
  * the calling role activity needs. The `--ask-for-approval never` and
- * `--sandbox workspace-write` flags are not configurable here — they are the
- * security envelope codex runs under in this system.
+ * `--sandbox danger-full-access` flags are not configurable here.
+ *
+ * Why `danger-full-access`: codex's other sandbox modes (`workspace-write` /
+ * `read-only`) shell out to bubblewrap, which on K8s nodes requires
+ * unprivileged user-namespace cloning. That depends on host kernel knobs
+ * (`kernel.apparmor_restrict_unprivileged_userns`, AppArmor profiles,
+ * seccomp) that we don't want to coordinate with the cluster operator.
+ * Instead the Pod itself is the isolation boundary — it runs non-root,
+ * with NetworkPolicy-restricted egress, an emptyDir workspace, and a
+ * read-only auth.json mount. codex's own sandbox is redundant in that
+ * setting.
  */
 export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput> {
   await ensureCodexAuth();
@@ -75,7 +78,7 @@ export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput
     'never',
     'exec',
     '--sandbox',
-    input.sandbox ?? 'workspace-write',
+    'danger-full-access',
     '--output-last-message',
     lastMsgPath,
   ];

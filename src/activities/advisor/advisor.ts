@@ -9,8 +9,10 @@
  *  - **Structured JSON verdict.** One of `retry / abort / change-strategy`,
  *    plus a short rationale. Parsed with the same tolerant extractor used
  *    elsewhere so a stray preamble doesn't sink the call.
- *  - **Read-only sandbox.** The advisor observes; it never mutates the
- *    working tree. Defense-in-depth on top of the prompt instructions.
+ *  - **Observe-only by convention.** The advisor must not mutate the
+ *    working tree. Enforced by prompt instruction only — codex runs with
+ *    `--sandbox danger-full-access` system-wide (see run-codex.ts) so the
+ *    Pod boundary, not codex's sandbox, is the isolation guarantee.
  *  - **Workflow-side budget.** The workflow owns an `AdvisorBudget`
  *    counter — the activity itself does not police call frequency.
  *
@@ -64,7 +66,7 @@ const ADVISOR_TIMEOUT_MS = 3 * 60 * 1000;
 const ADVISOR_PROMPT_PREAMBLE = `You are an **Advisor**. The autonomous agent you advise has hit a decision gate and consults you sparingly. Reply with EXACTLY one JSON object as the very first character of your reply. No prose, no markdown fences, no acknowledgments.
 
 Hard rules:
-- You are READ-ONLY. Do not modify any files. The workflow runs you under a read-only sandbox.
+- You are READ-ONLY. Do not modify any files. The workflow trusts you to honor this — there is no sandbox enforcing it.
 - No filler. No "I'll review this", "Looks good", or summary lines.
 - Keep \`rationale\` under 280 characters. Be terse and concrete.
 - Pick exactly one verdict that matches the agent's situation. Do not invent new verdicts.
@@ -109,7 +111,6 @@ ${optionsBlock}`;
     prompt,
     timeoutMs: ADVISOR_TIMEOUT_MS,
     model: input.model ?? process.env.ADVISOR_MODEL,
-    sandbox: 'read-only',
   });
 
   const json = extractJsonObject(res.lastMessage);

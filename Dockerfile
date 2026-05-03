@@ -7,9 +7,11 @@ FROM node:20-bookworm-slim AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System packages: git for cloning, curl/ca-certificates for installing gh,
-# bubblewrap so codex can use `--sandbox <mode>` (instead of the bypass flag)
-# without falling back to its vendored bwrap, which doesn't enforce reliably.
+# System packages: git for cloning, curl/ca-certificates for installing gh.
+# We deliberately do NOT install bubblewrap — codex runs with
+# `--sandbox danger-full-access` (see src/activities/_internal/run-codex.ts)
+# so bwrap is never invoked. The Pod itself is the isolation boundary
+# (non-root user, NetworkPolicy egress, emptyDir workspace).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git \
@@ -18,7 +20,6 @@ RUN apt-get update \
       gnupg \
       openssh-client \
       jq \
-      bubblewrap \
  && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (gh) from the official apt repo.

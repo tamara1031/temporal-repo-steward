@@ -49,28 +49,16 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
+        # 標準的な non-root pod。Pod 境界そのものを隔離単位として扱うので、
+        # codex CLI 側は --sandbox danger-full-access で動かしており、bwrap
+        # は走りません。ノードの seccomp / AppArmor / userns 関連の sysctl
+        # をいじる必要はありません。
         runAsNonRoot: true
         runAsUser: 1001
         fsGroup: 1001
-        # codex CLI が --sandbox モードを bubblewrap で強制する。bwrap は
-        # unprivileged user namespace と mount syscall を必要とするが
-        # RuntimeDefault seccomp プロファイルがそれらをブロックするため
-        # `bwrap: Failed to make / slave: Permission denied` で落ちる。
-        # Pod は single-tenant かつ NetworkPolicy で外向きを絞っているので
-        # Unconfined にして良い。
-        seccompProfile:
-          type: Unconfined
       containers:
         - name: worker
           image: ghcr.io/<owner>/temporal-repo-steward:preview
-          securityContext:
-            # AppArmor がデフォルトプロファイルを当てるホストでは bwrap の
-            # mount(MS_SLAVE) を弾くので、コンテナ単位で外す。
-            # K8s < 1.31 ではフィールド未対応なので、代わりに Pod metadata に
-            # `container.apparmor.security.beta.kubernetes.io/worker: unconfined`
-            # アノテーションを付ける。
-            appArmorProfile:
-              type: Unconfined
           envFrom:
             - configMapRef:
                 name: repo-steward-config
