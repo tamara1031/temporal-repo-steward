@@ -106,6 +106,11 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
   };
   const accumulatedFeedback: string[] = [];
   let lastDiffSnapshot: { entries: string[] } | undefined;
+  // Baseline taken once before any iteration so rollbacks can scope to only
+  // the files this step touched. Note: if a prior step already modified a
+  // file and this step modifies it further, diffPorcelain won't detect the
+  // additional change (same porcelain line) and that file won't be reverted.
+  const preStepStatus = await cheap.statusPorcelainActivity({ workdir });
 
   for (let iter = 0; iter < maxIter; iter++) {
     record.iters = iter + 1;
@@ -136,7 +141,10 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       log.info('no progress between iterations; rolling back this step', {
         step: step.title,
       });
-      await cheap.restoreActivity({ workdir, paths: filesFromPorcelain(postImplStatus.entries) });
+      const thisStepFiles = diffPorcelain(preStepStatus.entries, postImplStatus.entries);
+      if (thisStepFiles.length > 0) {
+        await cheap.restoreActivity({ workdir, paths: thisStepFiles });
+      }
       record.outcome = 'dropped-no-progress';
       return { kind: 'completed', record };
     }

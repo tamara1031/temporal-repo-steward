@@ -10,7 +10,7 @@ import { cheap, heavy, contextCodex, planCodex } from './proxies';
 import { robustPRMergeWorkflow } from './pr-lifecycle';
 import { refactorStepWorkflow } from './refactor-step';
 import type { ContextArtifact, PlanOutput } from '../activities/refactor';
-import { filesFromPorcelain } from './_internal/porcelain';
+import { filesFromPorcelain, diffPorcelain } from './_internal/porcelain';
 import { AdvisorBudget, type AdvisorAuditEntry } from './_internal/advisor';
 import { renderReport, type StepRecord } from './_internal/refactor-report';
 import { DEFAULT_PERIODIC_SPAWN_CAP, SpawnCounter } from './_internal/spawn-budget';
@@ -140,6 +140,7 @@ export async function periodicRefactorWorkflow(
         break;
       }
 
+      const preStepStatus = await cheap.statusPorcelainActivity({ workdir });
       const childOutput = await executeChild(refactorStepWorkflow, {
         args: [
           {
@@ -172,12 +173,11 @@ export async function periodicRefactorWorkflow(
       // kind === 'completed'
       if (!childOutput.record) continue; // defensive: shouldn't happen for 'completed'
       if (childOutput.record.outcome === 'dropped-not-converged') {
-        // Roll back the failed step before moving on. The child only rolls
-        // back the inner working tree on no-progress / critical_block; for
-        // dropped-not-converged we let the parent clean up because it owns
-        // the cross-step view.
+        // Roll back only the files this step added on top of prior steps.
+        // Using diffPorcelain against the pre-step snapshot avoids wiping
+        // converged changes from earlier steps that share the same workdir.
         const cur = await cheap.statusPorcelainActivity({ workdir });
-        const stepFiles = filesFromPorcelain(cur.entries);
+        const stepFiles = diffPorcelain(preStepStatus.entries, cur.entries);
         if (stepFiles.length > 0) {
           await cheap.restoreActivity({ workdir, paths: stepFiles });
         }
