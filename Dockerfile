@@ -44,6 +44,10 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
+# `npm run build` runs `tsc` AND emits `dist/workflow-bundle.js` via
+# `scripts/build-workflow-bundle.ts`. The runtime worker reads that bundle
+# instead of bundling at startup (Temporal best practice for production).
 RUN npm run build
 
 # ---- Runtime stage ----

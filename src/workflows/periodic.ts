@@ -2,6 +2,7 @@ import {
   executeChild,
   workflowInfo,
   log,
+  CancellationScope,
   ChildWorkflowCancellationType,
   ParentClosePolicy,
 } from '@temporalio/workflow';
@@ -325,13 +326,27 @@ export async function periodicRefactorWorkflow(
         },
       ],
       workflowId: `pr-lifecycle-${branch}`,
-      parentClosePolicy: ParentClosePolicy.TERMINATE,
+      // ABANDON lets the child PR-merge complete autonomously even if the
+      // periodic schedule is cancelled or the parent dies between "PR opened"
+      // and "PR merged". The child has its own `maxFixIterations` cap so it
+      // can't run forever.
+      parentClosePolicy: ParentClosePolicy.ABANDON,
       cancellationType: ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED,
     });
 
     return { prUrl: prResult.prUrl, prNumber: prResult.prNumber, merged: prResult.merged };
   } finally {
-    await cheap.cleanupWorkspaceActivity({ workdir }).catch(() => undefined);
+    // Cleanup must run even when the workflow is cancelled — otherwise the
+    // cancellation propagates to the cleanup activity and `workdir` leaks.
+    // Errors are logged rather than swallowed so a chronically-failing cleanup
+    // (disk full, permission issue) is observable.
+    await CancellationScope.nonCancellable(async () => {
+      try {
+        await cheap.cleanupWorkspaceActivity({ workdir });
+      } catch (err) {
+        log.warn('cleanupWorkspaceActivity failed', { workdir, err: String(err) });
+      }
+    });
   }
 }
 

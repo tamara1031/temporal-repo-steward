@@ -5,7 +5,8 @@
   "description": "Pull-based autonomous AI repo steward built on Temporal",
   "main": "dist/worker.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:workflows",
+    "build:workflows": "ts-node scripts/build-workflow-bundle.ts",
     "start.worker": "node dist/worker.js",
     "start.worker.dev": "ts-node src/worker.ts",
     "start.client": "ts-node src/client.ts",
