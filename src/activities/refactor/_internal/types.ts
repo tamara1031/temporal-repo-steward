@@ -25,6 +25,12 @@ export interface PlanStep {
   title: string;
   description: string;
   critical_requirements: string[];
+  /**
+   * Files the planner expects this step to touch. Populated by the planner
+   * LLM and threaded into the implementer prompt as a hard scope constraint.
+   * Optional: absent when the planner omits the field (older plans, mocks).
+   */
+  target_files?: string[];
 }
 
 export interface PlanOutput {

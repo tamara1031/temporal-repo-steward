@@ -112,6 +112,50 @@ describe('parsePlanOutput', () => {
     expect(result.steps[0].title).toBe('good');
   });
 
+  it('parses target_files when present and non-empty', () => {
+    const result = parsePlanOutput(
+      JSON.stringify({
+        theme: 'narrow scope',
+        rationale: 'focus the implementer',
+        steps: [
+          {
+            title: 'update parser',
+            description: 'tighten the parser',
+            critical_requirements: ['lint passes'],
+            target_files: ['src/activities/refactor/_internal/parsers.ts'],
+          },
+        ],
+      }),
+    );
+    expect(result.steps[0].target_files).toEqual([
+      'src/activities/refactor/_internal/parsers.ts',
+    ]);
+  });
+
+  it('omits target_files when absent from the planner output', () => {
+    const result = parsePlanOutput(
+      JSON.stringify({
+        theme: 'x',
+        rationale: 'y',
+        steps: [{ title: 't', description: 'd', critical_requirements: ['r'] }],
+      }),
+    );
+    expect(result.steps[0].target_files).toBeUndefined();
+  });
+
+  it('omits target_files when the field is not a string array (coercion)', () => {
+    const result = parsePlanOutput(
+      JSON.stringify({
+        theme: 'x',
+        rationale: 'y',
+        steps: [
+          { title: 't', description: 'd', critical_requirements: ['r'], target_files: 'not-array' },
+        ],
+      }),
+    );
+    expect(result.steps[0].target_files).toBeUndefined();
+  });
+
   it('throws PlannerOutputInvalid when codex returns no JSON object', () => {
     expect(() => parsePlanOutput('Here is my analysis...')).toThrow(
       expect.objectContaining({

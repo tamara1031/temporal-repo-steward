@@ -63,7 +63,10 @@ function normalizeStep(raw: unknown): PlanStep | undefined {
     ? (r.critical_requirements as unknown[]).filter((x): x is string => typeof x === 'string')
     : [];
   if (!title || !description || reqs.length === 0) return undefined;
-  return { title, description, critical_requirements: reqs };
+  const target_files = Array.isArray(r.target_files)
+    ? (r.target_files as unknown[]).filter((x): x is string => typeof x === 'string')
+    : undefined;
+  return { title, description, critical_requirements: reqs, ...(target_files !== undefined && { target_files }) };
 }
 
 export function parsePlanReviewOutput(text: string, concern: PlanReviewConcern): PlanReviewOutput {

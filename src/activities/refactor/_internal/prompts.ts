@@ -111,7 +111,8 @@ Output: reply with EXACTLY one JSON object as the very first character of your r
     {
       "title": string,
       "description": string,
-      "critical_requirements": [string, ...]
+      "critical_requirements": [string, ...],
+      "target_files": [string, ...]   // repo-relative paths the implementer is expected to modify; omit if unknown
     }
   ]
 }
@@ -129,6 +130,7 @@ You apply ONE step's edits to the working tree.
 Hard rules (in addition to the global rules above):
 - Edit the working tree only.
 - Stay strictly inside the step's scope. Do not "while you're at it" drift to other improvements — those belong to a future step.
+- If a \`## Files you may modify\` section appears below, treat those paths as a **hard scope constraint** — do not create or modify any file outside that list.
 - Run available test/lint commands to self-verify before reporting (\`npm test\`, \`npm run lint\`, \`tsc --noEmit\`, etc.). Brief retry on flake is fine; do not paper over real failures.
 - If you cannot satisfy a \`critical_requirement\`, say so explicitly. Do not silently weaken or paraphrase it.
 
@@ -342,12 +344,16 @@ const IMPLEMENT_PROMPT = (
     priorFeedback.length === 0
       ? '(none — this is the first iteration on this step)'
       : priorFeedback.map((f) => `- ${f}`).join('\n');
+  const filesBlock =
+    step.target_files && step.target_files.length > 0
+      ? `\n## Files you may modify\n${step.target_files.map((f) => `- ${f}`).join('\n')}\n`
+      : '';
   const dynamic = `## Dynamic input (this iteration)
 ### Step
 \`\`\`json
 ${stepBlock}
 \`\`\`
-
+${filesBlock}
 ### Prior reviewer feedback to address
 ${feedbackBlock}`;
   return compose(ctx, IMPLEMENT_STATIC_BODY, dynamic);
