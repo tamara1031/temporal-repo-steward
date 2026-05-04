@@ -4,9 +4,9 @@ import { ERR_INVALID_GH_OUTPUT } from '../src/errors';
 import {
   mapPostMergeStateToOutcome,
   parsePRStateJSON,
-  parsePRViewJSON,
 } from '../src/activities/github';
 import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
+import { parsePRViewJSON } from '../src/activities/github/_internal/pr-view';
 import {
   DEFAULT_PR_STATE_MAX_WAIT_MS,
   DEFAULT_PR_STATE_POLL_INTERVAL_MS,

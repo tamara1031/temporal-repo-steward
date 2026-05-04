@@ -27,14 +27,3 @@ export type { WaitForPostMergeInput, PostMergeOutcome } from './wait-for-post-me
 
 export { waitForPRStateActivity } from './wait-for-pr-state';
 export type { WaitForPRStateInput, WaitForPRStateOutput } from './wait-for-pr-state';
-
-// Internal helpers re-exported for the rare consumer that needs them
-// (e.g. tests parsing rollup JSON). NOT re-exported from the activities barrel.
-export {
-  decideCIStatus,
-  parseStatusCheckRollupJSON,
-  type RollupCheck,
-  type CIDecision,
-  type CompletedCIDecision,
-} from './_internal/ci-rollup';
-export { parsePRViewJSON, type PRViewJSON } from './_internal/pr-view';
