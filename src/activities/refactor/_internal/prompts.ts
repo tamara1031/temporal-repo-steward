@@ -233,7 +233,8 @@ Output: EXACTLY one JSON object with the same schema as the planner:
     {
       "title": string,
       "description": string,
-      "critical_requirements": [string, ...]
+      "critical_requirements": [string, ...],
+      "target_files": [string, ...]   // repo-relative paths the implementer is expected to modify; omit if unknown
     }
   ]
 }`;
