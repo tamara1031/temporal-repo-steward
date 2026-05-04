@@ -18,6 +18,7 @@ import {
   DEFAULT_STEP_LOOP_CONFIG,
   type CircuitBreaker,
 } from './_internal/refactor-step-loop';
+import { recoverWorkdir } from './_internal/workdir-recovery';
 
 export interface PeriodicRefactorInput {
   repoFullName: string;
@@ -101,11 +102,11 @@ export async function periodicRefactorWorkflow(
     // Recover workdir if the pod was replaced between pushBranchActivity and
     // here — the first activity boundary a pod restart could hit before any
     // codex work begins.
-    ({ workdir } = await heavy.ensureWorkdirActivity({
+    workdir = await recoverWorkdir(heavy.ensureWorkdirActivity, {
       workdir,
       repoFullName: input.repoFullName,
       branch,
-    }));
+    });
 
     const generatedAt = new Date(workflowInfo().startTime).toISOString();
     spawnCounter.consume('context', 1);
@@ -148,11 +149,11 @@ export async function periodicRefactorWorkflow(
 
     // Recover workdir if the pod was replaced during the (potentially long)
     // design phase. The branch is already on GitHub from the push above.
-    ({ workdir } = await heavy.ensureWorkdirActivity({
+    workdir = await recoverWorkdir(heavy.ensureWorkdirActivity, {
       workdir,
       repoFullName: input.repoFullName,
       branch,
-    }));
+    });
 
     // ── Phase 2. Step loop ───────────────────────────────────────────────
     // Each step runs as its own child workflow (`refactorStepWorkflow`) so the
@@ -179,11 +180,11 @@ export async function periodicRefactorWorkflow(
       }
 
       // Recover workdir if the pod was replaced since the last step completed.
-      ({ workdir } = await heavy.ensureWorkdirActivity({
+      workdir = await recoverWorkdir(heavy.ensureWorkdirActivity, {
         workdir,
         repoFullName: input.repoFullName,
         branch,
-      }));
+      });
 
       const childOutput = await executeChild(refactorStepWorkflow, {
         args: [
