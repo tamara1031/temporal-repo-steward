@@ -411,6 +411,49 @@ describe('pollCIStatus', () => {
     expect(poll.sleeps).toEqual([30_000, 30_000]);
   });
 
+  it('clips the final sleep to the remaining wait budget before timing out', async () => {
+    const poll = makeCIPoll([
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+    ]);
+
+    await expect(
+      pollCIStatus(
+        {
+          prNumber: 42,
+          pollIntervalSeconds: 30,
+          maxWaitSeconds: 45,
+          minSuccessStabilizationSeconds: 60,
+        },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ status: 'timeout', failedRunIds: [], failedJobNames: [] });
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([30_000, 15_000]);
+  });
+
+  it('returns timeout without sleeping when the wait budget is already exhausted', async () => {
+    const poll = makeCIPoll([
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+    ]);
+
+    await expect(
+      pollCIStatus(
+        {
+          prNumber: 42,
+          pollIntervalSeconds: 30,
+          maxWaitSeconds: 0,
+          minSuccessStabilizationSeconds: 60,
+        },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ status: 'timeout', failedRunIds: [], failedJobNames: [] });
+
+    expect(poll.observed()).toBe(0);
+    expect(poll.sleeps).toEqual([]);
+  });
+
   it.each([
     ['CLOSED', 'closed'],
     ['MERGED', 'merged'],

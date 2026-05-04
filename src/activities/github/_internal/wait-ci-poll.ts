@@ -5,6 +5,7 @@ import {
   type CompletedCIDecision,
   type RollupSnapshot,
 } from './ci-rollup';
+import { nextPollSleepMs } from './polling-budget';
 
 export interface CIResult {
   status: 'success' | 'failure' | 'timeout' | 'closed' | 'merged';
@@ -75,7 +76,11 @@ export async function pollCIStatus(
       stabilization = undefined;
     }
 
-    await deps.sleep(interval);
+    const sleepMs = nextPollSleepMs(deadline, deps.now(), interval);
+    if (sleepMs === undefined) {
+      break;
+    }
+    await deps.sleep(sleepMs);
   }
 
   return { status: 'timeout', failedRunIds: [], failedJobNames: [] };

@@ -1,4 +1,5 @@
 import type { ObservePRStateOutput, PRLifecycleState } from '../observe-pr-state';
+import { nextPollSleepMs } from './polling-budget';
 
 export interface WaitForPRStatePollOptions {
   prNumber: number;
@@ -36,7 +37,11 @@ export async function pollPRState(
       deps.onTargetState?.(lastObserved);
       return { ...lastObserved, timedOut: false };
     }
-    await deps.sleep(interval);
+    const sleepMs = nextPollSleepMs(deadline, deps.now(), interval);
+    if (sleepMs === undefined) {
+      break;
+    }
+    await deps.sleep(sleepMs);
   }
 
   return {
