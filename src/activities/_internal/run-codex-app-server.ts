@@ -19,6 +19,7 @@
 import { ApplicationFailure, heartbeat } from '@temporalio/activity';
 import * as WebSocket from 'ws';
 import { ERR_RATE_LIMITED, ERR_CODEX_INVOCATION } from '../../errors';
+import { isCodexRateLimitText } from './codex-rate-limit';
 import type { CodexRunInput, CodexRunOutput } from './run-codex';
 
 const CONNECT_RETRY_INTERVAL_MS = 500;
@@ -191,7 +192,7 @@ function extractFromTurnItems(items: unknown[]): string {
 }
 
 function classifyError(message: string, httpStatusCode: number): ApplicationFailure {
-  if (httpStatusCode === 429 || isRateLimitText(message)) {
+  if (httpStatusCode === 429 || isCodexRateLimitText(message)) {
     return ApplicationFailure.create({
       message: `codex app-server rate limit: ${message}`,
       type: ERR_RATE_LIMITED,
@@ -201,19 +202,6 @@ function classifyError(message: string, httpStatusCode: number): ApplicationFail
     message: `codex app-server turn failed: ${message}`,
     type: ERR_CODEX_INVOCATION,
   });
-}
-
-function isRateLimitText(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return (
-    lower.includes('429') ||
-    lower.includes('rate limit') ||
-    lower.includes('rate_limit') ||
-    lower.includes('rate-limit') ||
-    lower.includes('too many requests') ||
-    lower.includes('quota')
-  );
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────

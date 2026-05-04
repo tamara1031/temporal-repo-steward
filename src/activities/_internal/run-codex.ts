@@ -24,6 +24,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { execCommand } from './exec';
+import { isCodexRateLimitText } from './codex-rate-limit';
 import { runCodexAppServer } from './run-codex-app-server';
 import {
   ERR_MISSING_CREDENTIALS,
@@ -124,7 +125,7 @@ export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput
       // Rate-limit / quota detection. Classified as `RateLimited` (retryable)
       // rather than the generic `CodexInvocationError` so the workflow proxy's
       // RetryPolicy can apply quota-friendly backoff.
-      if (isRateLimit(res.stderr) || isRateLimit(res.stdout)) {
+      if (isCodexRateLimitText(res.stderr) || isCodexRateLimitText(res.stdout)) {
         throw ApplicationFailure.create({
           message: `codex hit a rate limit (exit ${res.code}): ${stderrSnippet}`,
           type: ERR_RATE_LIMITED,
@@ -146,27 +147,6 @@ export async function runCodexExec(input: CodexRunInput): Promise<CodexRunOutput
   } finally {
     await fs.rm(lastMsgDir, { recursive: true, force: true }).catch(() => undefined);
   }
-}
-
-/**
- * Heuristic rate-limit detection on codex stderr / stdout. Codex CLI does not
- * expose a structured error for upstream LLM 429s — the message bubbles up as
- * free text. We match common phrasings: HTTP 429, "rate limit", "quota", and
- * the OpenAI-style "rate_limit_exceeded" code. False positives are tolerable
- * because `RateLimited` is still retryable; false negatives would treat a
- * 429 as `CodexInvocationError` which the proxy retries far less patiently.
- */
-function isRateLimit(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return (
-    lower.includes('429') ||
-    lower.includes('rate limit') ||
-    lower.includes('rate_limit') ||
-    lower.includes('rate-limit') ||
-    lower.includes('too many requests') ||
-    lower.includes('quota')
-  );
 }
 
 async function readLastMessage(p: string): Promise<string | undefined> {
