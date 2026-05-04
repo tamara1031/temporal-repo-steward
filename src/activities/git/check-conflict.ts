@@ -27,6 +27,13 @@ async function isMergeInProgress(workdir: string): Promise<boolean> {
 export async function checkConflictActivity(
   input: CheckConflictInput,
 ): Promise<CheckConflictOutput> {
+  // Abort any in-progress merge from a prior attempt before starting fresh.
+  // Without this, a retry after pod replacement would skip the trial merge
+  // entirely and return stale conflict state from the previous attempt.
+  if (await isMergeInProgress(input.workdir)) {
+    await execCommand('git', ['merge', '--abort'], { cwd: input.workdir });
+  }
+
   const env = ghAuthEnv();
   await execOrThrow('git', ['fetch', 'origin', input.baseBranch], { cwd: input.workdir, env });
 
@@ -49,21 +56,18 @@ export async function checkConflictActivity(
     .map((s) => s.trim())
     .filter(Boolean);
 
-  let diffSummary: string | undefined;
   if (conflicted.length > 0) {
     const summary = await execOrThrow('git', ['diff', '--cc'], { cwd: input.workdir });
-    diffSummary = summary.stdout.slice(0, 16 * 1024);
+    const diffSummary = summary.stdout.slice(0, 16 * 1024);
+    // Leave the working tree in the conflicted merge state so the downstream
+    // codex conflict-resolve activity can see and fix the markers directly.
+    return { hasConflict: true, conflictedFiles: conflicted, diffSummary };
   }
 
-  // Abort only when a merge is actually in progress; otherwise `merge --abort`
-  // would error spuriously.
+  // Clean merge — abort to restore the working tree before returning.
   if (await isMergeInProgress(input.workdir)) {
     await execCommand('git', ['merge', '--abort'], { cwd: input.workdir });
   }
 
-  return {
-    hasConflict: conflicted.length > 0,
-    conflictedFiles: conflicted,
-    diffSummary,
-  };
+  return { hasConflict: false, conflictedFiles: [], diffSummary: undefined };
 }

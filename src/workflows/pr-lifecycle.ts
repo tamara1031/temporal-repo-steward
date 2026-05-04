@@ -350,13 +350,15 @@ async function runCISelfHeal(ctx: SelfHealContext): Promise<void> {
     context: 'CI logs:\n' + failedLogs.slice(0, 64 * 1024),
     prompt: 'Apply the minimal fix to the working tree, then stop.',
   });
+  const failedJobs = ctx.ci.failedJobNames.slice(0, 2).join(', ');
+  const selfHealMsg = `fix(ci): ${failedJobs || 'CI failures'} (attempt ${ctx.iter})`.slice(0, 72);
   await commitAndPushOrEscalate({
     iter: ctx.iter,
     input: ctx.input,
     workdir: ctx.workdir,
     advisorBudget: ctx.advisorBudget,
     audits: ctx.audits,
-    commitMessage: `fix(ci): self-heal attempt ${ctx.iter}`,
+    commitMessage: selfHealMsg,
     codexMessage: fix.message,
   });
 }
