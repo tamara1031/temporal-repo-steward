@@ -41,6 +41,16 @@ function stepsEqual(a: readonly PlanStep[], b: readonly PlanStep[]): boolean {
     for (let j = 0; j < ra.length; j++) {
       if (ra[j] !== rb[j]) return false;
     }
+    const ta = sa.target_files;
+    const tb = sb.target_files;
+    if (ta === undefined || tb === undefined) {
+      if (ta !== tb) return false;
+    } else {
+      if (ta.length !== tb.length) return false;
+      for (let j = 0; j < ta.length; j++) {
+        if (ta[j] !== tb[j]) return false;
+      }
+    }
   }
   return true;
 }

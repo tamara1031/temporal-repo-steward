@@ -250,4 +250,48 @@ describe('designPhaseWorkflow', () => {
     // 1 planner + 2 reviewers + 1 refiner (no second review round; bailed after no-progress).
     expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
   });
+
+  it('continues when the refiner changes only target_files', async () => {
+    const initialPlan = {
+      theme: 'tighten module boundaries',
+      rationale: 'reduces inter-module coupling',
+      steps: [
+        {
+          title: 'extract shared types',
+          description: 'move shared interfaces into a dedicated module',
+          critical_requirements: ['all existing unit tests still pass'],
+        },
+      ],
+    };
+    const refinedPlan = {
+      ...initialPlan,
+      steps: [
+        {
+          ...initialPlan.steps[0],
+          target_files: ['src/activities/refactor/_internal/types.ts'],
+        },
+      ],
+    };
+    const { activities } = makeMockActivities({
+      planActivity: async () => initialPlan,
+      reviewPlanActivity: async () => ({
+        verdict: 'needs_revision' as const,
+        blocking_issues: ['step needs a target file'],
+        suggestions: [],
+      }),
+      refinePlanActivity: async () => refinedPlan,
+    });
+
+    const result = await runWorkflow('design-phase-target-files-progress', activities, {
+      ...baseInput,
+      config: { maxRounds: 1, reviewerConcerns: ['feasibility', 'scope'] },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.designRecord?.outcome).toBe('max-rounds');
+    expect(result.plan?.steps[0].target_files).toEqual([
+      'src/activities/refactor/_internal/types.ts',
+    ]);
+    expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
+  });
 });
