@@ -53,15 +53,7 @@ export interface RefactorStepInput {
  */
 export type RefactorStepKind = 'completed' | 'budget-halted' | 'circuit-broken';
 
-export interface RefactorStepOutput {
-  kind: RefactorStepKind;
-  /**
-   * Present when `kind !== 'budget-halted'`. The parent appends this to
-   * its `stepRecords` list.
-   */
-  record?: StepRecord;
-  /** Present when `kind === 'circuit-broken'`. */
-  circuitBroken?: CircuitBreaker;
+interface RefactorStepAccounting {
   /** Codex spawns this step actually consumed, broken down by role. */
   spawnCounts: SpawnCounts;
   /** Advisor consults this step actually consumed (≤ input.advisorBudget). */
@@ -69,6 +61,22 @@ export interface RefactorStepOutput {
   /** Audit entries from advisor consults made during this step. */
   advisorAudits: AdvisorAuditEntry[];
 }
+
+export type RefactorStepOutput =
+  | (RefactorStepAccounting & {
+      kind: 'completed';
+      /** The parent appends this to its `stepRecords` list. */
+      record: StepRecord;
+    })
+  | (RefactorStepAccounting & {
+      kind: 'circuit-broken';
+      /** The parent appends this to its `stepRecords` list. */
+      record: StepRecord;
+      circuitBroken: CircuitBreaker;
+    })
+  | (RefactorStepAccounting & {
+      kind: 'budget-halted';
+    });
 
 export async function refactorStepWorkflow(
   input: RefactorStepInput,
