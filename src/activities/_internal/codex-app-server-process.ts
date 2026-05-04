@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import * as http from 'http';
+import * as readline from 'readline';
 
 const APP_SERVER_PORT = 8765;
 const READY_POLL_INTERVAL_MS = 500;
@@ -22,11 +23,12 @@ export async function startCodexAppServerProcess(): Promise<AppServerHandle> {
   const port = APP_SERVER_PORT;
   const url = `ws://127.0.0.1:${port}`;
 
-  // stdio:'inherit' — app-server logs flow directly to the worker container's
-  // stdout/stderr, which is what log collectors (CloudWatch, GKE Logging) expect.
   const proc = spawn('codex', ['app-server', '--listen', `ws://0.0.0.0:${port}`], {
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+
+  pipeWithPrefix(proc.stdout!, process.stdout, '[codex-app-server]');
+  pipeWithPrefix(proc.stderr!, process.stderr, '[codex-app-server]');
 
   await waitForReady(proc, port, READY_TIMEOUT_MS);
 
@@ -44,6 +46,16 @@ export async function startCodexAppServerProcess(): Promise<AppServerHandle> {
       }
     },
   };
+}
+
+function pipeWithPrefix(
+  input: NodeJS.ReadableStream,
+  output: NodeJS.WritableStream,
+  prefix: string,
+): void {
+  readline.createInterface({ input, crlfDelay: Infinity }).on('line', (line) => {
+    output.write(`${prefix} ${line}\n`);
+  });
 }
 
 function waitForReady(proc: ChildProcess, port: number, timeoutMs: number): Promise<void> {
