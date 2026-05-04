@@ -211,8 +211,8 @@ export async function periodicRefactorWorkflow(
       const stepProducedChanges =
         childOutput.kind === 'budget-halted' ||
         (childOutput.kind === 'completed' &&
-          (childOutput.record?.outcome === 'converged' ||
-            childOutput.record?.outcome === 'parliament-skipped'));
+          (childOutput.record.outcome === 'converged' ||
+            childOutput.record.outcome === 'parliament-skipped'));
 
       if (stepProducedChanges) {
         const stepPush = await heavy.commitAndPushActivity({
@@ -226,13 +226,12 @@ export async function periodicRefactorWorkflow(
       if (childOutput.kind === 'budget-halted') {
         break;
       }
-      if (childOutput.kind === 'circuit-broken' && childOutput.record) {
+      if (childOutput.kind === 'circuit-broken') {
         stepRecords.push(childOutput.record);
         circuitBroken = childOutput.circuitBroken;
         break;
       }
       // kind === 'completed'
-      if (!childOutput.record) continue; // defensive: shouldn't happen for 'completed'
       // dropped-not-converged / dropped-no-progress / rolled-back-critical-block:
       // the child workflow already rolled back this step's changes via
       // restoreAndPop() before returning, so no workdir cleanup is needed here.
