@@ -7,6 +7,11 @@ import {
   parsePRViewJSON,
 } from '../src/activities/github';
 import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
+import {
+  DEFAULT_PR_STATE_MAX_WAIT_MS,
+  DEFAULT_PR_STATE_POLL_INTERVAL_MS,
+  pollPRState,
+} from '../src/activities/github/_internal/wait-pr-state-poll';
 import type { PRLifecycleState } from '../src/activities/github';
 
 describe('github activity helpers', () => {
@@ -138,6 +143,75 @@ describe('pollPostMergeOutcome', () => {
   });
 });
 
+describe('pollPRState', () => {
+  it('returns when a default target state is observed', async () => {
+    const poll = makePRStatePoll(['OPEN', 'MERGED']);
+
+    await expect(
+      pollPRState({ prNumber: 42, pollIntervalMs: 10, maxWaitMs: 100 }, poll.deps),
+    ).resolves.toEqual({
+      state: 'MERGED',
+      mergedAt: '2026-05-03T00:00:00Z',
+      timedOut: false,
+    });
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([10]);
+  });
+
+  it('honors custom target states', async () => {
+    const poll = makePRStatePoll(['OPEN']);
+
+    await expect(
+      pollPRState(
+        { prNumber: 42, targetStates: ['OPEN'], pollIntervalMs: 10, maxWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ state: 'OPEN', timedOut: false });
+
+    expect(poll.observed()).toBe(1);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('returns the last observed state on timeout', async () => {
+    const poll = makePRStatePoll(['OPEN', 'OPEN']);
+
+    await expect(
+      pollPRState({ prNumber: 42, pollIntervalMs: 10, maxWaitMs: 20 }, poll.deps),
+    ).resolves.toEqual({ state: 'OPEN', timedOut: true });
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([10, 10]);
+  });
+
+  it('falls back to OPEN when timeout occurs before the first observation', async () => {
+    const poll = makePRStatePoll(['MERGED'], 1);
+
+    await expect(pollPRState({ prNumber: 42, maxWaitMs: 0 }, poll.deps)).resolves.toEqual({
+      state: 'OPEN',
+      timedOut: true,
+    });
+
+    expect(poll.observed()).toBe(0);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('uses the existing default poll interval and max wait', async () => {
+    const poll = makePRStatePoll(['OPEN']);
+
+    await expect(pollPRState({ prNumber: 42 }, poll.deps)).resolves.toEqual({
+      state: 'OPEN',
+      timedOut: true,
+    });
+
+    expect(poll.observed()).toBe(DEFAULT_PR_STATE_MAX_WAIT_MS / DEFAULT_PR_STATE_POLL_INTERVAL_MS);
+    expect(poll.sleeps).toHaveLength(
+      DEFAULT_PR_STATE_MAX_WAIT_MS / DEFAULT_PR_STATE_POLL_INTERVAL_MS,
+    );
+    expect(poll.sleeps.every((ms) => ms === DEFAULT_PR_STATE_POLL_INTERVAL_MS)).toBe(true);
+  });
+});
+
 function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): void {
   try {
     fn();
@@ -182,6 +256,37 @@ function makePostMergePoll(states: PRLifecycleState[]): {
     },
     sleeps,
     heartbeats,
+    observed: () => observed,
+  };
+}
+
+function makePRStatePoll(
+  states: PRLifecycleState[],
+  initialNow = 0,
+): {
+  deps: Parameters<typeof pollPRState>[1];
+  sleeps: number[];
+  observed: () => number;
+} {
+  const sleeps: number[] = [];
+  let observed = 0;
+  let now = initialNow;
+  return {
+    deps: {
+      observe: async () => {
+        const state = states[Math.min(observed, states.length - 1)];
+        observed += 1;
+        return state === 'MERGED'
+          ? { state, mergedAt: '2026-05-03T00:00:00Z' }
+          : { state };
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+      now: () => now,
+    },
+    sleeps,
     observed: () => observed,
   };
 }
