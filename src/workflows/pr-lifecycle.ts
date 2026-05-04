@@ -10,6 +10,7 @@ import {
   consultAdvisor,
   type AdvisorAuditEntry,
 } from './_internal/advisor';
+import { recoverWorkdir } from './_internal/workdir-recovery';
 
 export interface RobustPRMergeInput {
   repoFullName: string;
@@ -104,11 +105,11 @@ export async function robustPRMergeWorkflow(
   // Guard against pod replacement between periodicRefactorWorkflow spawning us
   // (with ABANDON policy) and our first git activity. The parent pushes the
   // branch before spawning, so GitHub is always reachable here.
-  ({ workdir } = await heavy.ensureWorkdirActivity({
+  workdir = await recoverWorkdir(heavy.ensureWorkdirActivity, {
     workdir,
     repoFullName: input.repoFullName,
     branch: input.branch,
-  }));
+  });
 
   await heavy.pushBranchActivity({
     workdir,
@@ -151,11 +152,11 @@ export async function robustPRMergeWorkflow(
     // waitForCIActivity can run for up to 70 minutes; the pod may have been
     // replaced in that window. Verify the workspace is still present and
     // re-clone if necessary before any git activity that needs it.
-    ({ workdir } = await heavy.ensureWorkdirActivity({
+    workdir = await recoverWorkdir(heavy.ensureWorkdirActivity, {
       workdir,
       repoFullName: input.repoFullName,
       branch: input.branch,
-    }));
+    });
 
     if (ci.status === 'failure') {
       iter += 1;
