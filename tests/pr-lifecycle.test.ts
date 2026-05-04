@@ -4,6 +4,7 @@ import { Worker } from '@temporalio/worker';
 import { WorkflowFailedError } from '@temporalio/client';
 import { randomUUID } from 'crypto';
 import { robustPRMergeWorkflow } from '../src/workflows';
+import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
 import { getWorkflowBundle, makeMockActivities } from './helpers';
 
 let env: TestWorkflowEnvironment;
@@ -297,3 +298,87 @@ describe('robustPRMergeWorkflow', () => {
     expect(result).toBeInstanceOf(WorkflowFailedError);
   });
 });
+
+describe('pollPostMergeOutcome lifecycle waits', () => {
+  it('returns merged immediately when MERGED is first observed', async () => {
+    const poll = makePostMergePoll(['MERGED']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merged');
+
+    expect(poll.observed()).toBe(1);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('returns closed-externally immediately when CLOSED is first observed', async () => {
+    const poll = makePostMergePoll(['CLOSED']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('closed-externally');
+
+    expect(poll.observed()).toBe(1);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('caps OPEN sleeps to remaining deadline budget and returns merge-queued', async () => {
+    const poll = makePostMergePoll(['OPEN', 'OPEN', 'OPEN']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 10, pollIntervalMs: 10, maxActivityWaitMs: 15 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merge-queued');
+
+    expect(poll.observed()).toBe(3);
+    expect(poll.sleeps).toEqual([10, 5]);
+  });
+
+  it('returns merge-queued after exhausting OPEN attempts', async () => {
+    const poll = makePostMergePoll(['OPEN', 'OPEN', 'OPEN']);
+
+    await expect(
+      pollPostMergeOutcome(
+        { prNumber: 42, maxPollAttempts: 3, pollIntervalMs: 10, maxActivityWaitMs: 100 },
+        poll.deps,
+      ),
+    ).resolves.toBe('merge-queued');
+
+    expect(poll.observed()).toBe(3);
+    expect(poll.sleeps).toEqual([10, 10]);
+  });
+});
+
+function makePostMergePoll(states: Array<'OPEN' | 'CLOSED' | 'MERGED'>) {
+  let observed = 0;
+  let nowMs = 0;
+  const sleeps: number[] = [];
+
+  return {
+    sleeps,
+    observed: () => observed,
+    deps: {
+      observe: async () => {
+        const state = states[Math.min(observed, states.length - 1)];
+        observed += 1;
+        return {
+          state,
+          ...(state === 'MERGED' ? { mergedAt: '2026-05-03T00:00:00Z' } : {}),
+        };
+      },
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      now: () => nowMs,
+    },
+  };
+}

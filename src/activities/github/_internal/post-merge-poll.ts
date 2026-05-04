@@ -1,4 +1,5 @@
 import type { PRLifecycleState } from '../observe-pr-state';
+import { nextPollSleepMs } from './polling-budget';
 
 export type PostMergeOutcome = 'merged' | 'merge-queued' | 'closed-externally';
 
@@ -50,9 +51,10 @@ export async function pollPostMergeOutcome(
       return outcome;
     }
 
-    const remainingMs = deadlineMs - deps.now();
-    if (attempt >= attempts || remainingMs <= 0) break;
-    await deps.sleep(Math.min(intervalMs, remainingMs));
+    if (attempt >= attempts) break;
+    const sleepMs = nextPollSleepMs(deadlineMs, deps.now(), intervalMs);
+    if (sleepMs === undefined) break;
+    await deps.sleep(sleepMs);
   }
 
   return 'merge-queued';
