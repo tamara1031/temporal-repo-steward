@@ -4,6 +4,10 @@ import * as path from 'path';
 import { NativeConnection, Worker, type WorkerOptions } from '@temporalio/worker';
 import * as activities from './activities';
 import { loadWorkerRuntimeConfig } from './runtime-config';
+import {
+  startCodexAppServerProcess,
+  type AppServerHandle,
+} from './activities/_internal/codex-app-server-process';
 
 /**
  * Resolve workflow source for the Worker. Production uses a pre-bundled file
@@ -26,7 +30,29 @@ function resolveWorkflowSource(): Pick<WorkerOptions, 'workflowBundle' | 'workfl
   return { workflowsPath: require.resolve('./workflows') };
 }
 
+async function maybeStartInternalAppServer(): Promise<AppServerHandle | null> {
+  if (process.env.CODEX_APP_SERVER_URL) {
+    console.log(`[worker] using external codex app-server at ${process.env.CODEX_APP_SERVER_URL}`);
+    return null;
+  }
+  try {
+    console.log('[worker] starting codex app-server in-process...');
+    const handle = await startCodexAppServerProcess();
+    process.env.CODEX_APP_SERVER_URL = handle.url;
+    console.log(`[worker] codex app-server ready at ${handle.url}`);
+    return handle;
+  } catch (err) {
+    console.warn(
+      '[worker] codex app-server could not start, falling back to subprocess mode:',
+      String(err),
+    );
+    return null;
+  }
+}
+
 async function run(): Promise<void> {
+  const appServer = await maybeStartInternalAppServer();
+
   const config = loadWorkerRuntimeConfig();
 
   const connection = await NativeConnection.connect({
@@ -52,12 +78,14 @@ async function run(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`[worker] received ${signal}, shutting down`);
     worker.shutdown();
+    appServer?.stop();
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
   await worker.run();
   await connection.close();
+  appServer?.stop();
 }
 
 run().catch((err) => {

@@ -1,25 +1,12 @@
 # Temporal repo-steward worker — Kubernetes Deployment
 #
-# Pod layout
-# ----------
-#   worker (main)          node dist/worker.js
-#   codex-app-server       codex app-server --listen ws://0.0.0.0:8765
-#
-# The two containers share:
-#   - localhost network namespace  →  worker reaches app-server at 127.0.0.1:8765
-#   - workspaces emptyDir volume   →  both containers read/write /workspaces
-#
-# Native sidecar (K8s ≥ 1.29)
-# ----------------------------
-# codex-app-server is declared as an initContainer with restartPolicy: Always.
-# This guarantees the sidecar is Running and its readiness probe has passed
-# before the main container starts, without any sleep or retry in the worker.
-# On clusters older than 1.29 the app-server must be moved to `containers:`
-# and the worker's 30s connectWithRetry covers the race window.
+# The worker container spawns `codex app-server` as an in-process child on
+# startup (src/worker.ts → startCodexAppServerProcess).  No sidecar needed —
+# auth.json is mounted directly in the worker container.
 #
 # Secrets required
 # ----------------
-#   codex-auth          Opaque with key auth.json (from `codex login`)
+#   codex-auth                  Opaque with key auth.json (from `codex login`)
 #   temporal-repo-steward-env   Opaque with envvars (GITHUB_TOKEN, etc.)
 ---
 apiVersion: apps/v1
@@ -38,51 +25,6 @@ spec:
       labels:
         app: temporal-repo-steward-worker
     spec:
-      # ── Native sidecar (K8s ≥ 1.29) ─────────────────────────────────────
-      initContainers:
-        - name: codex-app-server
-          image: temporal-repo-steward:latest
-          restartPolicy: Always   # marks this as a native sidecar
-          command: ["codex", "app-server", "--listen", "ws://0.0.0.0:8765"]
-          env:
-            - name: HOME
-              value: /home/agent
-          ports:
-            - name: ws
-              containerPort: 8765
-              protocol: TCP
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8765
-            initialDelaySeconds: 2
-            periodSeconds: 5
-            failureThreshold: 6
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8765
-            initialDelaySeconds: 10
-            periodSeconds: 15
-          volumeMounts:
-            - name: codex-auth
-              mountPath: /home/agent/.codex/auth.json
-              subPath: auth.json
-              readOnly: true
-            - name: workspaces
-              mountPath: /workspaces
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            allowPrivilegeEscalation: false
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              memory: 1Gi
-
-      # ── Main worker container ─────────────────────────────────────────────
       containers:
         - name: worker
           image: temporal-repo-steward:latest
@@ -95,15 +37,14 @@ spec:
               value: repo-steward
             - name: HOME
               value: /home/agent
-            # Route all codex calls to the co-located app-server sidecar.
-            - name: CODEX_APP_SERVER_URL
-              value: ws://127.0.0.1:8765
           envFrom:
             - secretRef:
                 name: temporal-repo-steward-env
           volumeMounts:
-            - name: workspaces
-              mountPath: /workspaces
+            - name: codex-auth
+              mountPath: /home/agent/.codex/auth.json
+              subPath: auth.json
+              readOnly: true
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
@@ -120,5 +61,3 @@ spec:
           secret:
             secretName: codex-auth
             defaultMode: 0600
-        - name: workspaces
-          emptyDir: {}

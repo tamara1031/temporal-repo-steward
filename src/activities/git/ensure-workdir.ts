@@ -37,7 +37,7 @@ export async function ensureWorkdirActivity(
     // Directory is gone — fall through to re-clone.
   }
 
-  const root = input.workspaceRoot ?? path.join(os.tmpdir(), 'repo-steward-workspaces');
+  const root = input.workspaceRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), 'repo-steward-workspaces');
   await fs.mkdir(root, { recursive: true });
   const safeName = input.repoFullName.replace('/', '__');
   const workdir = await fs.mkdtemp(path.join(root, `${safeName}-`));
