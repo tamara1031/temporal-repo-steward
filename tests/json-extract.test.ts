@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractJsonObject, extractJsonObjectResult } from '../src/activities/_internal/json-extract';
+import { extractJsonObject, extractJsonObjectResult, extractStringArray } from '../src/activities/_internal/json-extract';
 
 describe('extractJsonObject', () => {
   it('parses whole-object JSON', () => {
@@ -58,5 +58,27 @@ describe('extractJsonObject', () => {
       overview: 'uses {braces} in strings',
       conventions: [],
     });
+  });
+});
+
+describe('extractStringArray', () => {
+  it('returns all string elements from a homogeneous string array', () => {
+    expect(extractStringArray(['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
+  });
+
+  it('drops non-string elements from a mixed array', () => {
+    expect(extractStringArray(['a', 1, null, 'b', true, undefined, {}])).toEqual(['a', 'b']);
+  });
+
+  it('returns empty array for an empty array input', () => {
+    expect(extractStringArray([])).toEqual([]);
+  });
+
+  it('returns empty array for non-array inputs', () => {
+    expect(extractStringArray(null)).toEqual([]);
+    expect(extractStringArray(undefined)).toEqual([]);
+    expect(extractStringArray('string')).toEqual([]);
+    expect(extractStringArray(42)).toEqual([]);
+    expect(extractStringArray({ key: 'value' })).toEqual([]);
   });
 });

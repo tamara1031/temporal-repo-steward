@@ -8,6 +8,15 @@ export type JsonObjectExtraction =
   | { ok: true; value: Record<string, unknown> }
   | { ok: false; kind: 'empty' | 'no-json-object' | 'malformed-json' | 'non-object-json'; message: string };
 
+/**
+ * Coerce an unknown JSON value to a `string[]`, silently dropping non-string elements.
+ * Returns an empty array for any non-array input.
+ */
+export function extractStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === 'string');
+}
+
 type JsonObjectExtractionFailure = Extract<JsonObjectExtraction, { ok: false }>;
 
 /**
