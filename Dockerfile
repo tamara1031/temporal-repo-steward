@@ -59,7 +59,8 @@ ENV NODE_ENV=production \
     TEMPORAL_ADDRESS=temporal-frontend.temporal.svc.cluster.local:7233 \
     TEMPORAL_NAMESPACE=default \
     TEMPORAL_TASK_QUEUE=repo-steward \
-    HOME=/home/agent
+    HOME=/home/agent \
+    XDG_CACHE_HOME=/tmp
 
 # Match the host UID (1000) so bind-mounted files like ~/.codex/auth.json
 # (mode 600, owned by the host user) remain readable inside the container.

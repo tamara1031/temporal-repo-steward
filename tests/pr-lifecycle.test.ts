@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { Worker } from '@temporalio/worker';
 import { WorkflowFailedError } from '@temporalio/client';
 import { randomUUID } from 'crypto';
 import { robustPRMergeWorkflow } from '../src/workflows';
 import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
-import { getWorkflowBundle, makeMockActivities } from './helpers';
+import { runWorkflowWithMocks, type MockActivityOverrides } from './helpers';
 
 let env: TestWorkflowEnvironment;
 
@@ -28,27 +27,22 @@ const baseInput = {
 
 async function runWith(
   taskQueueName: string,
-  acts: Parameters<typeof makeMockActivities>[0],
+  acts: MockActivityOverrides,
   input: Partial<typeof baseInput> & {
     maxFixIterations?: number;
     postMergePollAttempts?: number;
     postMergePollIntervalMs?: number;
   } = {},
 ) {
-  const { activities, calls } = makeMockActivities(acts);
-  const worker = await Worker.create({
-    connection: env.nativeConnection,
-    taskQueue: taskQueueName,
-    workflowBundle: await getWorkflowBundle(),
-    activities,
-  });
-  const promise = env.client.workflow.execute(robustPRMergeWorkflow, {
+  return runWorkflowWithMocks({
+    env,
     taskQueue: taskQueueName,
     workflowId: `${taskQueueName}-${randomUUID()}`,
+    workflow: robustPRMergeWorkflow,
     args: [{ ...baseInput, ...input }],
+    activityOverrides: acts,
+    catchErrors: true,
   });
-  const result = await worker.runUntil(promise).catch((err: unknown) => err);
-  return { result, calls };
 }
 
 describe('robustPRMergeWorkflow', () => {

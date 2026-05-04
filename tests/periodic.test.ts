@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { Worker } from '@temporalio/worker';
 import { randomUUID } from 'crypto';
 import { periodicRefactorWorkflow } from '../src/workflows';
 import type { createPRActivity } from '../src/activities/github/create-pr';
-import { getWorkflowBundle, makeMockActivities } from './helpers';
+import { runWorkflowWithMocks, type MockActivityOverrides } from './helpers';
 
 let env: TestWorkflowEnvironment;
 type CreatePRActivityInput = Parameters<typeof createPRActivity>[0];
+type PeriodicInput = Parameters<typeof periodicRefactorWorkflow>[0];
 
 beforeAll(async () => {
   env = await TestWorkflowEnvironment.createLocal();
@@ -17,30 +17,35 @@ afterAll(async () => {
   await env?.teardown();
 });
 
+async function runPeriodicWorkflow(
+  taskQueue: string,
+  workflowId: string,
+  activityOverrides?: MockActivityOverrides,
+  input: PeriodicInput = { repoFullName: 'example/repo' },
+) {
+  return runWorkflowWithMocks({
+    env,
+    taskQueue,
+    workflow: periodicRefactorWorkflow,
+    workflowId,
+    args: [input],
+    activityOverrides,
+  });
+}
+
 describe('periodicRefactorWorkflow', () => {
   it('skips PR when planner returns no-op', async () => {
-    const { activities, calls } = makeMockActivities({
-      planActivity: async () => ({
-        theme: 'no-op',
-        rationale: 'repo already optimal',
-        steps: [],
-      }),
-    });
-
     const taskQueue = 'periodic-test-noop';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { result, calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    const result = await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-noop-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-noop-${randomUUID()}`,
+      {
+        planActivity: async () => ({
+          theme: 'no-op',
+          rationale: 'repo already optimal',
+          steps: [],
+        }),
+      },
     );
 
     expect(result).toEqual({ skipped: 'no-op-plan' });
@@ -54,28 +59,17 @@ describe('periodicRefactorWorkflow', () => {
   });
 
   it('skips Parliament when implementer diff is trivial', async () => {
-    const { activities, calls } = makeMockActivities({
-      diffStatActivity: async () => ({
-        filesChanged: 1,
-        insertions: 5,
-        deletions: 2,
-      }),
-    });
-
     const taskQueue = 'periodic-test-trivial';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { result, calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    const result = await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-trivial-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-trivial-${randomUUID()}`,
+      {
+        diffStatActivity: async () => ({
+          filesChanged: 1,
+          insertions: 5,
+          deletions: 2,
+        }),
+      },
     );
 
     expect(result.prNumber).toBe(42);
@@ -99,46 +93,35 @@ describe('periodicRefactorWorkflow', () => {
     let planSawCtx = false;
     let implementSawCtx = false;
     let reviewSawCtx = 0;
-    const { activities, calls } = makeMockActivities({
-      extractContextArtifactActivity: async () => ctxArtifact,
-      planActivity: async (input: any) => {
-        planSawCtx = input?.contextArtifact?.overview === ctxArtifact.overview;
-        return {
-          theme: 'fixture-theme',
-          rationale: 'fixture',
-          steps: [
-            {
-              title: 's',
-              description: 'd',
-              critical_requirements: ['tests still pass'],
-            },
-          ],
-        };
-      },
-      implementActivity: async (input: any) => {
-        implementSawCtx = input?.contextArtifact?.overview === ctxArtifact.overview;
-        return { report: 'ok' };
-      },
-      reviewActivity: async (input: any) => {
-        if (input?.contextArtifact?.overview === ctxArtifact.overview) reviewSawCtx += 1;
-        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
-      },
-    });
-
     const taskQueue = 'periodic-test-ctx';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-ctx-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-ctx-${randomUUID()}`,
+      {
+        extractContextArtifactActivity: async () => ctxArtifact,
+        planActivity: async (input: any) => {
+          planSawCtx = input?.contextArtifact?.overview === ctxArtifact.overview;
+          return {
+            theme: 'fixture-theme',
+            rationale: 'fixture',
+            steps: [
+              {
+                title: 's',
+                description: 'd',
+                critical_requirements: ['tests still pass'],
+              },
+            ],
+          };
+        },
+        implementActivity: async (input: any) => {
+          implementSawCtx = input?.contextArtifact?.overview === ctxArtifact.overview;
+          return { report: 'ok' };
+        },
+        reviewActivity: async (input: any) => {
+          if (input?.contextArtifact?.overview === ctxArtifact.overview) reviewSawCtx += 1;
+          return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+        },
+      },
     );
 
     expect(planSawCtx).toBe(true);
@@ -152,33 +135,22 @@ describe('periodicRefactorWorkflow', () => {
 
   it('runs Parliament and merges when diff is non-trivial and reviewers approve', async () => {
     let capturedBody = '';
-    const { activities, calls } = makeMockActivities({
-      createPRActivity: async (input: CreatePRActivityInput) => {
-        capturedBody = input.body;
-        return {
-          number: 42,
-          url: 'https://github.com/example/repo/pull/42',
-          branch: input.branch,
-          baseBranch: input.baseBranch,
-          repoFullName: input.repoFullName,
-        };
-      },
-    });
-
     const taskQueue = 'periodic-test-happy';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { result, calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    const result = await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-happy-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-happy-${randomUUID()}`,
+      {
+        createPRActivity: async (input: CreatePRActivityInput) => {
+          capturedBody = input.body;
+          return {
+            number: 42,
+            url: 'https://github.com/example/repo/pull/42',
+            branch: input.branch,
+            baseBranch: input.baseBranch,
+            repoFullName: input.repoFullName,
+          };
+        },
+      },
     );
 
     expect(result.prNumber).toBe(42);
@@ -205,45 +177,34 @@ describe('periodicRefactorWorkflow', () => {
 
   it('rolls back and skips PR on critical_block when advisor agrees (verdict=abort)', async () => {
     let restoreCalledWithoutPaths = false;
-    const { activities, calls } = makeMockActivities({
-      reviewActivity: async (input: any) => {
-        if (input.concern === 'correctness') {
-          return {
-            verdict: 'critical_block' as const,
-            blocking_issues: ['credential leak in src/foo.ts'],
-            suggestions: [],
-          };
-        }
-        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
-      },
-      restoreActivity: async (input: any) => {
-        if (!input?.paths) restoreCalledWithoutPaths = true;
-        return undefined;
-      },
-      // Advisor agrees: keep the rollback.
-      consultAdvisorActivity: async () => ({
-        verdict: 'abort' as const,
-        rationale: 'agreed: critical security issue',
-      }),
-      // After the full restore the working tree is clean → workflow returns
-      // skipped: 'no-changes'.
-      statusPorcelainActivity: async () => ({ entries: [] }),
-    });
-
     const taskQueue = 'periodic-test-block';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { result, calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    const result = await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-block-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-block-${randomUUID()}`,
+      {
+        reviewActivity: async (input: any) => {
+          if (input.concern === 'correctness') {
+            return {
+              verdict: 'critical_block' as const,
+              blocking_issues: ['credential leak in src/foo.ts'],
+              suggestions: [],
+            };
+          }
+          return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+        },
+        restoreActivity: async (input: any) => {
+          if (!input?.paths) restoreCalledWithoutPaths = true;
+          return undefined;
+        },
+        // Advisor agrees: keep the rollback.
+        consultAdvisorActivity: async () => ({
+          verdict: 'abort' as const,
+          rationale: 'agreed: critical security issue',
+        }),
+        // After the full restore the working tree is clean -> workflow returns
+        // skipped: 'no-changes'.
+        statusPorcelainActivity: async () => ({ entries: [] }),
+      },
     );
 
     expect(result).toEqual({ skipped: 'no-changes', prOutcome: undefined } as any);
@@ -260,51 +221,40 @@ describe('periodicRefactorWorkflow', () => {
   it('downgrades critical_block to needs_revision when advisor returns retry', async () => {
     let correctnessCalls = 0;
     let diffCalls = 0;
-    const { activities, calls } = makeMockActivities({
-      reviewActivity: async (input: any) => {
-        if (input.concern === 'correctness') {
-          correctnessCalls += 1;
-          // First iteration trips the gate; second iteration approves.
-          if (correctnessCalls === 1) {
-            return {
-              verdict: 'critical_block' as const,
-              blocking_issues: ['over-cautious flag'],
-              suggestions: [],
-            };
-          }
-        }
-        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
-      },
-      // Vary diff text per call so iter 1's no-progress check sees real
-      // progress and proceeds to Parliament again.
-      diffTextActivity: async () => {
-        diffCalls += 1;
-        return {
-          text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
-          truncated: false,
-        };
-      },
-      // Advisor downgrades critical_block to needs_revision.
-      consultAdvisorActivity: async () => ({
-        verdict: 'retry' as const,
-        rationale: 'reviewer is over-cautious',
-      }),
-    });
-
     const taskQueue = 'periodic-test-advisor-downgrade';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    const { calls } = await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-advisor-downgrade-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-advisor-downgrade-${randomUUID()}`,
+      {
+        reviewActivity: async (input: any) => {
+          if (input.concern === 'correctness') {
+            correctnessCalls += 1;
+            // First iteration trips the gate; second iteration approves.
+            if (correctnessCalls === 1) {
+              return {
+                verdict: 'critical_block' as const,
+                blocking_issues: ['over-cautious flag'],
+                suggestions: [],
+              };
+            }
+          }
+          return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+        },
+        // Vary diff text per call so iter 1's no-progress check sees real
+        // progress and proceeds to Parliament again.
+        diffTextActivity: async () => {
+          diffCalls += 1;
+          return {
+            text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
+            truncated: false,
+          };
+        },
+        // Advisor downgrades critical_block to needs_revision.
+        consultAdvisorActivity: async () => ({
+          verdict: 'retry' as const,
+          rationale: 'reviewer is over-cautious',
+        }),
+      },
     );
 
     const names = calls.log.map((c) => c.name);
@@ -322,58 +272,47 @@ describe('periodicRefactorWorkflow', () => {
     let correctnessCalls = 0;
     let diffCalls = 0;
     let capturedBody = '';
-    const { activities } = makeMockActivities({
-      reviewActivity: async (input: any) => {
-        if (input.concern === 'correctness') {
-          correctnessCalls += 1;
-          if (correctnessCalls === 1) {
-            return {
-              verdict: 'critical_block' as const,
-              blocking_issues: ['over-cautious flag'],
-              suggestions: [],
-            };
-          }
-        }
-        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
-      },
-      diffTextActivity: async () => {
-        diffCalls += 1;
-        return {
-          text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
-          truncated: false,
-        };
-      },
-      consultAdvisorActivity: async () => ({
-        verdict: 'retry' as const,
-        rationale: 'looks over-cautious; one more pass should land it',
-        suggestedAction: 'add the suggested guard and retry',
-      }),
-      createPRActivity: async (input: CreatePRActivityInput) => {
-        capturedBody = input.body;
-        return {
-          number: 42,
-          url: 'https://github.com/example/repo/pull/42',
-          branch: input.branch,
-          baseBranch: input.baseBranch,
-          repoFullName: input.repoFullName,
-        };
-      },
-    });
-
     const taskQueue = 'periodic-test-advisor-body';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
+    await runPeriodicWorkflow(
       taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId: `periodic-advisor-body-${randomUUID()}`,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+      `periodic-advisor-body-${randomUUID()}`,
+      {
+        reviewActivity: async (input: any) => {
+          if (input.concern === 'correctness') {
+            correctnessCalls += 1;
+            if (correctnessCalls === 1) {
+              return {
+                verdict: 'critical_block' as const,
+                blocking_issues: ['over-cautious flag'],
+                suggestions: [],
+              };
+            }
+          }
+          return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+        },
+        diffTextActivity: async () => {
+          diffCalls += 1;
+          return {
+            text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
+            truncated: false,
+          };
+        },
+        consultAdvisorActivity: async () => ({
+          verdict: 'retry' as const,
+          rationale: 'looks over-cautious; one more pass should land it',
+          suggestedAction: 'add the suggested guard and retry',
+        }),
+        createPRActivity: async (input: CreatePRActivityInput) => {
+          capturedBody = input.body;
+          return {
+            number: 42,
+            url: 'https://github.com/example/repo/pull/42',
+            branch: input.branch,
+            baseBranch: input.baseBranch,
+            repoFullName: input.repoFullName,
+          };
+        },
+      },
     );
 
     expect(capturedBody).toContain('## Advisor consults');
@@ -385,29 +324,17 @@ describe('periodicRefactorWorkflow', () => {
 
   it('sanitizes branch names when workflowId contains colons (e.g. from schedules)', async () => {
     let capturedBranch = '';
-    const { activities } = makeMockActivities({
-      cloneRepoActivity: async (input: any) => {
-        capturedBranch = input.branch;
-        return { workdir: '/tmp/workdir', branch: input.branch, baseSha: 'sha' };
-      },
-    });
-
     const taskQueue = 'periodic-test-sanitize';
-    const worker = await Worker.create({
-      connection: env.nativeConnection,
-      taskQueue,
-      workflowBundle: await getWorkflowBundle(),
-      activities,
-    });
-
-    // Simulate a scheduled workflow ID with colons
     const workflowId = 'periodic-refactor-repo-2026-05-03T10:00:00Z';
-    await worker.runUntil(
-      env.client.workflow.execute(periodicRefactorWorkflow, {
-        taskQueue,
-        workflowId,
-        args: [{ repoFullName: 'example/repo' }],
-      }),
+    await runPeriodicWorkflow(
+      taskQueue,
+      workflowId,
+      {
+        cloneRepoActivity: async (input: any) => {
+          capturedBranch = input.branch;
+          return { workdir: '/tmp/workdir', branch: input.branch, baseSha: 'sha' };
+        },
+      },
     );
 
     expect(capturedBranch).toBe('agent/refactor/periodic-refactor-repo-2026-05-03T10-00-00Z');

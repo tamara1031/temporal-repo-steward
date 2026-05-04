@@ -14,7 +14,6 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { Worker } from '@temporalio/worker';
 import { ApplicationFailure } from '@temporalio/common';
 import { ERR_PLANNER_OUTPUT_INVALID } from '../src/errors';
 import { randomUUID } from 'crypto';
@@ -23,7 +22,7 @@ import {
   DEFAULT_DESIGN_PHASE_CONFIG,
   type DesignPhaseInput,
 } from '../src/workflows/design-phase';
-import { getWorkflowBundle, makeMockActivities } from './helpers';
+import { runWorkflowWithMocks, type MockActivityOverrides } from './helpers';
 
 let env: TestWorkflowEnvironment;
 
@@ -51,30 +50,23 @@ const baseInput: DesignPhaseInput = {
 
 async function runWorkflow(
   taskQueue: string,
-  activities: ReturnType<typeof makeMockActivities>['activities'],
   input: DesignPhaseInput,
+  activityOverrides?: MockActivityOverrides,
 ) {
-  const worker = await Worker.create({
-    connection: env.nativeConnection,
+  return runWorkflowWithMocks({
+    env,
     taskQueue,
-    workflowBundle: await getWorkflowBundle(),
-    activities,
+    workflow: designPhaseWorkflow,
+    workflowId: `design-phase-${randomUUID()}`,
+    args: [input],
+    activityOverrides,
   });
-  return worker.runUntil(
-    env.client.workflow.execute(designPhaseWorkflow, {
-      taskQueue,
-      workflowId: `design-phase-${randomUUID()}`,
-      args: [input],
-    }),
-  );
 }
 
 describe('designPhaseWorkflow', () => {
   it('returns completed/converged when both plan reviewers approve on the first round', async () => {
     // Default helpers: planActivity returns a valid plan, reviewPlanActivity returns `ok`.
-    const { activities, calls } = makeMockActivities();
-
-    const result = await runWorkflow('design-phase-converged', activities, baseInput);
+    const { result, calls } = await runWorkflow('design-phase-converged', baseInput);
 
     expect(result.outcome).toBe('completed');
     expect(result.plan).toBeDefined();
@@ -94,9 +86,7 @@ describe('designPhaseWorkflow', () => {
   });
 
   it('returns completed/single-shot and skips parliament when maxRounds=0', async () => {
-    const { activities, calls } = makeMockActivities();
-
-    const result = await runWorkflow('design-phase-single-shot', activities, {
+    const { result, calls } = await runWorkflow('design-phase-single-shot', {
       ...baseInput,
       config: { ...DEFAULT_DESIGN_PHASE_CONFIG, maxRounds: 0 },
     });
@@ -116,15 +106,13 @@ describe('designPhaseWorkflow', () => {
   });
 
   it('returns no-op when the planner returns theme=no-op', async () => {
-    const { activities, calls } = makeMockActivities({
+    const { result, calls } = await runWorkflow('design-phase-noop', baseInput, {
       planActivity: async () => ({
         theme: 'no-op',
         rationale: 'repo is already optimal',
         steps: [],
       }),
     });
-
-    const result = await runWorkflow('design-phase-noop', activities, baseInput);
 
     expect(result.outcome).toBe('no-op');
     expect(result.plan?.theme).toBe('no-op');
@@ -136,7 +124,7 @@ describe('designPhaseWorkflow', () => {
   });
 
   it('returns plan-failed when the planner throws a non-retryable error', async () => {
-    const { activities, calls } = makeMockActivities({
+    const { result, calls } = await runWorkflow('design-phase-plan-failed', baseInput, {
       planActivity: async () => {
         throw ApplicationFailure.nonRetryable(
           'planner did not return a parseable JSON object',
@@ -144,8 +132,6 @@ describe('designPhaseWorkflow', () => {
         );
       },
     });
-
-    const result = await runWorkflow('design-phase-plan-failed', activities, baseInput);
 
     expect(result.outcome).toBe('plan-failed');
     expect(result.plan).toBeUndefined();
@@ -156,9 +142,7 @@ describe('designPhaseWorkflow', () => {
   });
 
   it('returns budget-exhausted when spawnBudget=0', async () => {
-    const { activities, calls } = makeMockActivities();
-
-    const result = await runWorkflow('design-phase-budget', activities, {
+    const { result, calls } = await runWorkflow('design-phase-budget', {
       ...baseInput,
       spawnBudget: 0,
     });
@@ -176,32 +160,34 @@ describe('designPhaseWorkflow', () => {
     // Both reviewers always return needs_revision; refiner returns a genuinely
     // different plan each time so no-progress detection does not fire first.
     let refineCount = 0;
-    const { activities, calls } = makeMockActivities({
-      reviewPlanActivity: async () => ({
-        verdict: 'needs_revision' as const,
-        blocking_issues: ['step description is too vague'],
-        suggestions: ['add concrete file paths'],
-      }),
-      refinePlanActivity: async () => {
-        refineCount += 1;
-        return {
-          theme: 'tighten module boundaries',
-          rationale: `reduces coupling (revision ${refineCount})`,
-          steps: [
-            {
-              title: 'extract shared types',
-              description: `move shared interfaces into a dedicated module (v${refineCount})`,
-              critical_requirements: ['all existing unit tests still pass'],
-            },
-          ],
-        };
+    const { result, calls } = await runWorkflow(
+      'design-phase-max-rounds',
+      {
+        ...baseInput,
+        config: { maxRounds: 1, reviewerConcerns: ['feasibility', 'scope'] },
       },
-    });
-
-    const result = await runWorkflow('design-phase-max-rounds', activities, {
-      ...baseInput,
-      config: { maxRounds: 1, reviewerConcerns: ['feasibility', 'scope'] },
-    });
+      {
+        reviewPlanActivity: async () => ({
+          verdict: 'needs_revision' as const,
+          blocking_issues: ['step description is too vague'],
+          suggestions: ['add concrete file paths'],
+        }),
+        refinePlanActivity: async () => {
+          refineCount += 1;
+          return {
+            theme: 'tighten module boundaries',
+            rationale: `reduces coupling (revision ${refineCount})`,
+            steps: [
+              {
+                title: 'extract shared types',
+                description: `move shared interfaces into a dedicated module (v${refineCount})`,
+                critical_requirements: ['all existing unit tests still pass'],
+              },
+            ],
+          };
+        },
+      },
+    );
 
     expect(result.outcome).toBe('completed');
     expect(result.designRecord?.outcome).toBe('max-rounds');
@@ -227,20 +213,22 @@ describe('designPhaseWorkflow', () => {
         },
       ],
     };
-    const { activities } = makeMockActivities({
-      reviewPlanActivity: async () => ({
-        verdict: 'needs_revision' as const,
-        blocking_issues: ['step is still vague'],
-        suggestions: [],
-      }),
-      // Refiner returns the identical plan — no-progress detection should fire.
-      refinePlanActivity: async () => unchangedPlan,
-    });
-
-    const result = await runWorkflow('design-phase-no-progress', activities, {
-      ...baseInput,
-      config: { maxRounds: 2, reviewerConcerns: ['feasibility', 'scope'] },
-    });
+    const { result } = await runWorkflow(
+      'design-phase-no-progress',
+      {
+        ...baseInput,
+        config: { maxRounds: 2, reviewerConcerns: ['feasibility', 'scope'] },
+      },
+      {
+        reviewPlanActivity: async () => ({
+          verdict: 'needs_revision' as const,
+          blocking_issues: ['step is still vague'],
+          suggestions: [],
+        }),
+        // Refiner returns the identical plan — no-progress detection should fire.
+        refinePlanActivity: async () => unchangedPlan,
+      },
+    );
 
     expect(result.outcome).toBe('completed');
     expect(result.designRecord?.outcome).toBe('dropped-no-progress');
@@ -272,20 +260,22 @@ describe('designPhaseWorkflow', () => {
         },
       ],
     };
-    const { activities } = makeMockActivities({
-      planActivity: async () => initialPlan,
-      reviewPlanActivity: async () => ({
-        verdict: 'needs_revision' as const,
-        blocking_issues: ['step needs a target file'],
-        suggestions: [],
-      }),
-      refinePlanActivity: async () => refinedPlan,
-    });
-
-    const result = await runWorkflow('design-phase-target-files-progress', activities, {
-      ...baseInput,
-      config: { maxRounds: 1, reviewerConcerns: ['feasibility', 'scope'] },
-    });
+    const { result } = await runWorkflow(
+      'design-phase-target-files-progress',
+      {
+        ...baseInput,
+        config: { maxRounds: 1, reviewerConcerns: ['feasibility', 'scope'] },
+      },
+      {
+        planActivity: async () => initialPlan,
+        reviewPlanActivity: async () => ({
+          verdict: 'needs_revision' as const,
+          blocking_issues: ['step needs a target file'],
+          suggestions: [],
+        }),
+        refinePlanActivity: async () => refinedPlan,
+      },
+    );
 
     expect(result.outcome).toBe('completed');
     expect(result.designRecord?.outcome).toBe('max-rounds');

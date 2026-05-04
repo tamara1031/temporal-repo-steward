@@ -1,4 +1,5 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import * as os from 'os';
 import { ERR_MISSING_CREDENTIALS } from '../../../errors';
 
 /**
@@ -13,7 +14,11 @@ export function ghEnv(): NodeJS.ProcessEnv {
       ERR_MISSING_CREDENTIALS,
     );
   }
-  return { GH_TOKEN: token, GITHUB_TOKEN: token };
+  return {
+    GH_TOKEN: token,
+    GITHUB_TOKEN: token,
+    XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? os.tmpdir(),
+  };
 }
 
 /**

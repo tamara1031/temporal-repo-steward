@@ -17,14 +17,13 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { Worker } from '@temporalio/worker';
 import { randomUUID } from 'crypto';
 import { refactorStepWorkflow } from '../src/workflows';
 import {
   DEFAULT_STEP_LOOP_CONFIG,
   type RefactorStepInput,
 } from '../src/workflows/refactor-step';
-import { getWorkflowBundle, makeMockActivities } from './helpers';
+import { runWorkflowWithMocks, type MockActivityOverrides } from './helpers';
 
 let env: TestWorkflowEnvironment;
 
@@ -56,31 +55,24 @@ const baseInput: RefactorStepInput = {
 
 async function runWorkflow(
   taskQueue: string,
-  activities: ReturnType<typeof makeMockActivities>['activities'],
   input: RefactorStepInput,
+  activityOverrides?: MockActivityOverrides,
 ) {
-  const worker = await Worker.create({
-    connection: env.nativeConnection,
+  return runWorkflowWithMocks({
+    env,
     taskQueue,
-    workflowBundle: await getWorkflowBundle(),
-    activities,
+    workflow: refactorStepWorkflow,
+    workflowId: `refactor-step-${randomUUID()}`,
+    args: [input],
+    activityOverrides,
   });
-  return worker.runUntil(
-    env.client.workflow.execute(refactorStepWorkflow, {
-      taskQueue,
-      workflowId: `refactor-step-${randomUUID()}`,
-      args: [input],
-    }),
-  );
 }
 
 describe('refactorStepWorkflow', () => {
   it('completes with outcome=converged when both reviewers approve', async () => {
     // Default helpers mock both reviewers as `ok` and a non-trivial diff,
     // which is exactly the converged path.
-    const { activities, calls } = makeMockActivities();
-
-    const result = await runWorkflow('refactor-step-converged', activities, baseInput);
+    const { result, calls } = await runWorkflow('refactor-step-converged', baseInput);
 
     expect(result.kind).toBe('completed');
     expect(result.record).toBeDefined();
@@ -100,15 +92,13 @@ describe('refactorStepWorkflow', () => {
 
   it('skips Parliament and returns parliament-skipped on a trivial diff', async () => {
     // Tip the diff under both thresholds so the Pre-Parliament Gate fires.
-    const { activities, calls } = makeMockActivities({
+    const { result, calls } = await runWorkflow('refactor-step-trivial', baseInput, {
       diffStatActivity: async () => ({
         filesChanged: 1,
         insertions: 5,
         deletions: 2,
       }),
     });
-
-    const result = await runWorkflow('refactor-step-trivial', activities, baseInput);
 
     expect(result.kind).toBe('completed');
     expect(result.record?.outcome).toBe('parliament-skipped');
@@ -125,29 +115,31 @@ describe('refactorStepWorkflow', () => {
 
   it('returns kind=circuit-broken when a reviewer critical_blocks and advisor budget is 0', async () => {
     let restoreCalledWithoutPaths = false;
-    const { activities, calls } = makeMockActivities({
-      reviewActivity: async (input: any) => {
-        if (input.concern === 'correctness') {
-          return {
-            verdict: 'critical_block' as const,
-            blocking_issues: ['credential leak in src/foo.ts'],
-            suggestions: ['rotate the leaked token'],
-          };
-        }
-        return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+    const { result, calls } = await runWorkflow(
+      'refactor-step-cb',
+      {
+        ...baseInput,
+        // Advisor budget = 0 means consultAdvisor() returns reply: undefined,
+        // so the workflow falls back to the default rollback.
+        advisorBudget: 0,
       },
-      restoreActivity: async (input: any) => {
-        if (!input?.paths) restoreCalledWithoutPaths = true;
-        return undefined;
+      {
+        reviewActivity: async (input: any) => {
+          if (input.concern === 'correctness') {
+            return {
+              verdict: 'critical_block' as const,
+              blocking_issues: ['credential leak in src/foo.ts'],
+              suggestions: ['rotate the leaked token'],
+            };
+          }
+          return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
+        },
+        restoreActivity: async (input: any) => {
+          if (!input?.paths) restoreCalledWithoutPaths = true;
+          return undefined;
+        },
       },
-    });
-
-    const result = await runWorkflow('refactor-step-cb', activities, {
-      ...baseInput,
-      // Advisor budget = 0 means consultAdvisor() returns reply: undefined,
-      // so the workflow falls back to the default rollback.
-      advisorBudget: 0,
-    });
+    );
 
     expect(result.kind).toBe('circuit-broken');
     expect(result.record).toBeDefined();
@@ -167,9 +159,7 @@ describe('refactorStepWorkflow', () => {
   });
 
   it('returns kind=budget-halted without running activities when spawnBudget is 0', async () => {
-    const { activities, calls } = makeMockActivities();
-
-    const result = await runWorkflow('refactor-step-budget', activities, {
+    const { result, calls } = await runWorkflow('refactor-step-budget', {
       ...baseInput,
       spawnBudget: 0,
     });
