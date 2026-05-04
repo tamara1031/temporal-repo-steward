@@ -1,7 +1,7 @@
 # temporal-repo-steward
 
-Pull 型・Webhook 不要・Temporal 駆動の自律 AI エージェント基盤。
-定期的にリポジトリを巡回してリファクタ PR を出し、CI が落ちたら自己修復してマージまで完遂する。
+A pull-based, webhook-free, Temporal-driven autonomous AI agent platform.  
+It periodically scans a repository, opens refactor PRs via codex, self-heals CI failures, and merges automatically.
 
 ```
 Temporal Schedule ──▶ periodicRefactorWorkflow
@@ -9,213 +9,183 @@ Temporal Schedule ──▶ periodicRefactorWorkflow
                           └─▶ robustPRMergeWorkflow (child)            — push → CI → merge
 ```
 
-## できること
+## Features
 
-- **定期リファクタ**: Schedule で起動 → codex がコードを解析・適用 → PR → 自動 CI 修復 → マージ。
-- **CI 自己修復ループ**: `gh run view --log-failed` を codex に渡して fix → push → 再度 CI 待機。
-- **コンフリクト解消ループ**: `git merge --no-commit` でトライアル → codex で解消 → push → CI へ戻る。
-- **外部干渉に強い**: CI 待機中に PR が外部で close / merge されても throw せず正常終了。
-  別 PR が先に merge されたケースは workflow 内で短絡する。
-- **Advisor (上位モデル相談)**: 2 回目以降の self-heal や no-diff の場面で `ADVISOR_MODEL`
-  に問い合わせ、`{verdict: retry|abort|change-strategy}` を取得。abort なら早期停止。
-  入力は事前に集約したサマリー（≤ 2 KiB）で、tokens は最小限。`maxAdvisorConsults`
-  （既定 2）でハードキャップ。設定なしなら codex のデフォルトモデルを使う。
-- **post-merge ポーリング**: `gh pr merge --auto` の "merge 要求" と "実際の merge 完了"
-  を区別。observe で MERGED が見えるまでポーリングし、見えなければ `merge-queued` を返す。
+- **Periodic refactor**: Schedule triggers → codex analyses and applies changes → PR → CI self-heal → auto-merge.
+- **CI self-heal loop**: Feeds `gh run view --log-failed` output to codex → fix → push → wait for CI again.
+- **Conflict resolution loop**: Trial merge with `git merge --no-commit` → codex resolves conflicts → push → back to CI.
+- **External-interference tolerant**: If a PR is closed or merged externally during CI polling, the workflow exits cleanly instead of throwing.
+- **Advisor (upper-model consult)**: On the second self-heal iteration or on no-diff, queries `ADVISOR_MODEL` for `{verdict: retry|abort|change-strategy}`. Aborts early on `abort`. Input is a pre-aggregated summary (≤ 2 KiB) to keep token usage minimal. Hard-capped at `maxAdvisorConsults` (default 1 for periodic, 2 for PR lifecycle). Falls back to the codex default model when `ADVISOR_MODEL` is unset.
+- **Post-merge polling**: Distinguishes `gh pr merge --auto` acceptance from actual merge landing. Polls until `mergedAt` is observed; returns `merge-queued` if the protection gate hasn't cleared yet.
 
-> Issue 駆動ルートと Claude 連携はいったん外しています。
-> 復活させるときは `refactorStepWorkflow`（implement→review ループ）と
-> `robustPRMergeWorkflow`（push→CI→merge）を子として再利用すれば容易に追加可能。
+> Issue-driven routes and direct Claude API integration are currently removed.  
+> To re-add them, reuse `refactorStepWorkflow` (implement → review loop) and  
+> `robustPRMergeWorkflow` (push → CI → merge) as child workflows.
 
-## ディレクトリ構成
+## Directory structure
 
 ```
 .
-├── Dockerfile                       # Node20 + gh + codex
-├── docker-compose.yml               # Temporal dev + Worker のローカル一括起動
+├── Dockerfile                       # Node 20 + gh CLI + codex CLI
+├── docker-compose.yml               # Local dev: Temporal dev server + worker
+├── deploy/k8s/worker-deployment.yaml# Kubernetes Deployment manifest
 ├── package.json                     # @temporalio/* (~1.11)
 ├── tsconfig.json
-├── .env.example                     # Worker が読む環境変数のテンプレート
+├── .env.example                     # Worker env var template
 ├── scripts/
 │   ├── schedule-setup.sh            # temporal schedule create --upsert
-│   └── build-workflow-bundle.ts     # 本番向け事前バンドル
+│   └── build-workflow-bundle.ts     # Pre-bundle for production
 ├── src/
 │   ├── constants.ts                 # TASK_QUEUE
-│   ├── worker.ts                    # Worker 起動エントリ
-│   ├── client.ts                    # 開発用クライアント (install-schedule / run-once)
-│   ├── activities/                  # Worker が登録する Activity 群（1 ファイル = 1 Activity）
-│   │   ├── index.ts                 # barrel — Worker への登録対象
-│   │   ├── _internal/               # クラスタ横断ヘルパー (非 Activity)
-│   │   ├── advisor/                 # 上位モデル相談 (consultAdvisorActivity)
-│   │   ├── codex/                   # 汎用 codex (codexActivity)
-│   │   ├── git/                     # clone / commit / push / conflict / restore / 等
+│   ├── worker.ts                    # Worker entry point; spawns codex app-server in-process
+│   ├── client.ts                    # Dev client (install-schedule / run-once)
+│   ├── activities/                  # Activities registered with the worker (1 file = 1 Activity)
+│   │   ├── index.ts                 # Barrel — registered with Worker
+│   │   ├── _internal/               # Shared helpers (not Activities)
+│   │   ├── advisor/                 # Upper-model consult (consultAdvisorActivity)
+│   │   ├── codex/                   # Generic single-shot codex (codexActivity)
+│   │   ├── git/                     # clone / commit / push / conflict / restore / etc.
 │   │   ├── github/                  # gh CLI (create-pr / wait-for-ci / merge / observe)
-│   │   └── refactor/                # codex 役割別 (extract-context / plan / implement / review)
-│   └── workflows/                   # Workflow 定義（決定論的）
+│   │   └── refactor/                # Role-specific codex (extract-context / plan / implement / review)
+│   └── workflows/                   # Workflow definitions (deterministic)
 │       ├── index.ts
-│       ├── proxies.ts               # proxyActivities (cheap / heavy / *Codex / advisor / ciWait)
+│       ├── proxies.ts               # proxyActivities groups (cheap / heavy / *Codex / advisor / ciWait)
 │       ├── periodic.ts              # periodicRefactorWorkflow (orchestrator)
 │       ├── refactor-step.ts         # refactorStepWorkflow (child, 1 plan step)
 │       ├── pr-lifecycle.ts          # robustPRMergeWorkflow (child)
-│       └── _internal/               # workflow ヘルパー (非ワークフロー)
-│           ├── advisor.ts           # advisor budget + consult protocol
-│           ├── porcelain.ts         # git status diff helpers
+│       └── _internal/               # Workflow helpers (non-workflow code)
+│           ├── advisor.ts           # Advisor budget + consult protocol
+│           ├── porcelain.ts         # git status/diff helpers
 │           ├── refactor-report.ts   # PR body renderer (pure)
-│           ├── refactor-step-loop.ts# implement→Parliament loop body (used by refactor-step.ts)
+│           ├── refactor-step-loop.ts# implement → Parliament loop body
 │           └── spawn-budget.ts      # codex spawn counter + cap
 ├── tests/
-│   ├── exec.test.ts                 # spawn ラッパー
-│   ├── git.test.ts                  # git env ヘルパー
-│   ├── github.test.ts               # gh JSON パーサ
-│   ├── github-ci.test.ts            # statusCheckRollup の解釈
-│   ├── porcelain.test.ts            # workflow 内 diff ヘルパー
+│   ├── exec.test.ts
+│   ├── git.test.ts
+│   ├── github.test.ts
+│   ├── github-ci.test.ts
+│   ├── porcelain.test.ts
 │   ├── periodic.test.ts             # periodicRefactorWorkflow (TestWorkflowEnvironment)
 │   ├── pr-lifecycle.test.ts         # robustPRMergeWorkflow (TestWorkflowEnvironment)
-│   ├── replay.test.ts               # 履歴互換 replay (placeholder)
-│   ├── helpers.ts                   # bundle + mock activity factory
-│   └── fixtures/replay/             # 履歴フィクスチャ置き場
+│   ├── replay.test.ts               # History-replay compatibility (placeholder)
+│   ├── helpers.ts                   # Bundle + mock activity factory
+│   └── fixtures/replay/             # Replay history fixture directory
 └── docs/
-    ├── architecture.md              # 構成・ワークフロー・設定リファレンス
-    └── deployment-example.md        # Kubernetes サンプル
+    ├── architecture.md              # Workflow/Activity design, configuration reference
+    └── deployment-example.md        # Kubernetes deployment example
 ```
 
-詳細な Activity / Workflow 入力 / 環境変数の一覧は
-[`docs/architecture.md`](./docs/architecture.md) の **Configuration reference**
-セクションを参照。
+See [`docs/architecture.md`](./docs/architecture.md) for the full Activity/Workflow input and environment variable reference.
 
-## クイックスタート (ローカル)
+## Quick start (local)
 
 ```bash
-# 1. Temporal dev サーバを別ターミナルで起動
+# 1. Start a Temporal dev server in a separate terminal
 temporal server start-dev
 
-# 2. 依存インストール
+# 2. Install dependencies
 npm install
 
-# 3. codex CLI にブラウザでログイン（~/.codex/auth.json が生成される）
+# 3. Log in to codex via browser (~/.codex/auth.json is created)
 codex login
 
-# 4. .env を整えて Worker を起動
+# 4. Configure env and start the worker
 cp .env.example .env
-$EDITOR .env       # GITHUB_TOKEN を入れる
+$EDITOR .env        # set GITHUB_TOKEN, GIT_BOT_NAME, GIT_BOT_EMAIL
 npm run start.worker.dev
 
-# 5. Schedule をインストール
+# 5. Install the schedule
 npm run start.client -- --command=install-schedule --repo=<owner>/<repo>
 
-# 6. テスト (TestWorkflowEnvironment が裏でローカル Temporal を起動)
+# 6. Run tests (TestWorkflowEnvironment starts a local Temporal server)
 npm test
 ```
 
-詳細は [`docs/architecture.md`](./docs/architecture.md) と [`docs/deployment-example.md`](./docs/deployment-example.md)。
+See [`docs/architecture.md`](./docs/architecture.md) and [`docs/deployment-example.md`](./docs/deployment-example.md) for more detail.
 
-## 認証情報
+## Authentication
 
-| 認証 | 形式 | 用途 |
+| Credential | Format | Purpose |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | env var | `gh` / `git push` |
-| `~/.codex/auth.json` | JSON ファイル | codex CLI（`codex login` で生成） |
+| `GITHUB_TOKEN` | env var | `gh` CLI and `git push` |
+| `~/.codex/auth.json` | JSON file | codex CLI (created by `codex login`) |
 
-`OPENAI_API_KEY` は使いません。codex CLI のブラウザログインで作られる `auth.json`
-を Worker にマウントする方式です（`CODEX_HOME` でディレクトリを上書き可）。
+`OPENAI_API_KEY` is **not** used. The worker uses codex's browser-login `auth.json`.  
+Set `CODEX_HOME` to override the directory where `auth.json` is read.
 
-### GitHub PAT に必要な権限
+### GitHub PAT permissions
 
-PAT は **agent が PR を出すことになる対象 repo** に対して以下の権限が必要です。
+The PAT must have the following permissions on the **target repository**:
 
-#### 推奨: Fine-grained PAT（単一 repo にスコープ）
+#### Fine-grained PAT (recommended — scoped to a single repo)
 
-| 権限 | レベル | 用途 |
+| Permission | Level | Purpose |
 | --- | --- | --- |
-| `Contents` | Read & Write | clone / branch 作成 / push |
-| `Pull requests` | Read & Write | PR 作成 / マージ |
-| `Actions` | Read | `gh run view --log-failed`（CI 失敗ログ取得） |
-| `Workflows` | Read & Write | `.github/workflows/*.yml` を編集する PR を作る場合に必要 |
-| `Metadata` | Read | 全 fine-grained PAT で自動付与 |
+| `Contents` | Read & Write | clone / branch / push |
+| `Pull requests` | Read & Write | create PR / merge |
+| `Actions` | Read | `gh run view --log-failed` (CI failure logs) |
+| `Workflows` | Read & Write | Required when the refactor touches `.github/workflows/*.yml` |
+| `Metadata` | Read | Granted automatically on all fine-grained PATs |
 
-> Workflows 権限を外すとリファクタが workflow ファイルを触ったときに push が拒否されます。
-> 不安なら最初は付けて、運用後に必要性を見直してください。
+> Without `Workflows`, a push that modifies workflow files will be rejected by GitHub.
 
-#### 簡易: Classic PAT
+#### Classic PAT (simpler — applies to the entire owner)
 
-最低限のスコープ:
+Minimum scopes:
+- `repo` (covers Contents / PRs / Actions / Workflows)
+- `workflow` (required when `.github/workflows` files are modified)
 
-- `repo`（フルアクセス。Contents / PR / Actions / Workflows をまとめてカバー）
-- `workflow`（`.github/workflows` への書き込みが発生する場合）
+#### Token expiry
 
-> Classic PAT はオーナー全体にアクセスが行くため、可能なら fine-grained を推奨。
+Set a short expiry (e.g. 90 days) and have a rotation plan.  
+An expired token causes `gh`/`git` 401 errors that exhaust Activity retries before the Workflow fails.  
+Check the Temporal Web UI (`:8233`) for `401 Unauthorized` in the failure history.
 
-#### 失効と更新
+For Kubernetes deployments, store credentials as Secrets. See [`docs/deployment-example.md`](./docs/deployment-example.md).
 
-- 期限を 90 日 など短めに設定し、Secret ローテーションの運用を作っておくこと。
-- 失効した場合 Worker は `MissingCredentials` ではなく `gh` / `git` の 401 で失敗します。
-  Activity リトライ上限まで粘った後に Workflow が失敗する。Temporal Web UI（`:8233`）の
-  失敗履歴で `401 Unauthorized` を見つけたら PAT 期限切れを疑う。
+## Design decisions
 
-実運用 (Kubernetes) では Secret として homelab 側で管理。サンプルマニフェストは
-[`docs/deployment-example.md`](./docs/deployment-example.md) を参照。
+- **Pull-based**: No inbound endpoint. Everything is triggered by a Temporal Schedule. No Service, Ingress, or HTTPRoute required.
+- **CI wait is a heartbeating Activity**: Multi-minute waits use Activity-side polling with heartbeat rather than `workflow.sleep()`.
+- **PR lifecycle is a Child Workflow**: Reusable by any orchestrator (e.g. an issue-driven workflow can call the same child).
+- **Tiered Activity retry policies**: lightweight (gh reads) / heavyweight (clone, push) / per-codex-role / advisor / CI-wait each have independent retry/timeout settings. `MissingCredentials`, `InvalidGitRef`, `PlannerOutputInvalid`, `AdvisorOutputInvalid`, and `InvalidGitHubOutput` are **nonRetryable** — they fail immediately. See the [Activity proxy table](./docs/architecture.md#activity-proxy-mapping).
+- **Determinism**: Workflows never call `Date.now()`, `Math.random()`, `process.env`, or `fs` directly — all side effects are pushed into Activities.
+- **codex sandbox**: All codex invocations use `dangerFullAccess` (app-server: `sandboxPolicy: { type: 'dangerFullAccess' }`; subprocess fallback: `--sandbox danger-full-access`). The Pod itself is the isolation boundary — it runs non-root with restricted egress. codex's own sandbox modes (`workspace-write`, `read-only`) require bubblewrap / unprivileged user-namespace support that we do not want to coordinate with the cluster operator.
 
-## 主要な設計判断
+## CI and branch protection
 
-- **Pull 型**: 受信エンドポイント無し。すべて Temporal Schedule から起動する。Service / Ingress / HTTPRoute は不要。
-- **CI 待機は heartbeating activity**: 数分〜1 時間級の待ちを Workflow 内で `sleep` せず、Activity 側でポーリング + heartbeat。
-- **PR ライフサイクルは Child Workflow**: 上位 Workflow から再利用可能（後で Issue 駆動を足すときも同じ子を呼べばよい）。
-- **Activity リトライは段階別**: 軽量 (gh read 系) / 重量 (clone, push) / codex 役割別 / advisor / CI 待機 で別ポリシー。`MissingCredentials` `InvalidGitRef` `PlannerOutputInvalid` `AdvisorOutputInvalid` `InvalidGitHubOutput` は **nonRetryable** で即失敗。詳細は [`docs/architecture.md` の Activity Proxy / ApplicationFailure type catalog](./docs/architecture.md)。
-- **Determinism**: Workflow から `Date.now()` / `Math.random()` / 直接 `process.env` を呼ばない。すべて Activity に閉じ込める。
+`.github/workflows/ci.yml` has two jobs:
 
-## CI と branch protection
-
-`.github/workflows/ci.yml` には 2 つの job があります:
-
-| Job | 内容 | PR 時 | main push 時 |
+| Job | Content | On PR | On push to main |
 | --- | --- | --- | --- |
-| `build / lint / test` | npm の build / lint / lint.tests / test | ✅ | ✅ |
-| `docker image` | `Dockerfile` ビルド + GHCR へ push | build のみ | `ghcr.io/<owner>/<repo>:preview` で push |
+| `build / lint / test` | npm build + lint + test | ✅ | ✅ |
+| `docker image` | Dockerfile build + push to GHCR | build only | pushes `ghcr.io/<owner>/<repo>:preview` |
 
-`:preview` タグは main の最新コミットを指す追跡タグ。安定版は `Release`
-ワークフロー（`workflow_dispatch`）から `:0.x.y` と `:latest` で push される
-（git タグは慣例通り `v0.x.y`、image tag は `v` を外した plain semver）。
+The `:preview` tag tracks the latest main commit. Stable releases use `:0.x.y` and `:latest` pushed by a `workflow_dispatch` Release workflow (git tag convention: `v0.x.y`).
 
-### Branch protection（必須）
+### Branch protection (required)
 
-**Agent が出した PR を CI で gate するには、main の branch protection 設定が必須**です:
+**Without branch protection, `gh pr merge --auto` will merge even when CI is red.**
 
-1. GitHub repo の `Settings → Branches → Branch protection rules → Add rule`
-2. `Branch name pattern: main`
-3. ✅ `Require a pull request before merging`
-4. ✅ `Require status checks to pass before merging`
-   - `Require branches to be up to date before merging`
-   - 必須チェックに `build / lint / test` と `docker image` を追加
-5. ✅ `Do not allow bypassing the above settings`（オプション、より厳格に）
+1. `Settings → Branches → Branch protection rules → Add rule`
+2. Branch name pattern: `main`
+3. ✅ Require a pull request before merging
+4. ✅ Require status checks to pass before merging  
+   — check "Require branches to be up to date before merging"  
+   — add `build / lint / test` and `docker image` as required checks
+5. ✅ Do not allow bypassing the above settings (optional, stricter)
 
-これを設定しないと `gh pr merge --auto` が CI red でも素通しでマージしてしまいます。
+### GHCR package visibility
 
-### GHCR パッケージの可視性
+The `ghcr.io/<owner>/<repo>` package is created as private on the first push.  
+To make it public, change visibility in GitHub Packages settings and link it to the repository.
 
-初回 push 時に `ghcr.io/<owner>/<repo>` パッケージが自動作成されます。
-デフォルトは private。public にする場合は GitHub の Packages 画面から
-visibility を切り替え、Repository に link することで以降の push が同じパッケージへ届きます。
+`mergePRActivity` uses `--auto --squash --delete-branch`, so the agent merges automatically when CI turns green.  
+Pass `autoMerge: false` as workflow input to stop just before merge (returns `outcome: 'auto-merge-disabled'`).
 
-`mergePRActivity` は `--auto --squash --delete-branch` を使うので、CI が green
-になった瞬間に **agent が自動でマージ** します。怖い場合は workflow の入力で
-`autoMerge: false` を渡せば PR 作成 + CI 自己修復まで走らせて merge 直前で
-止められます（`outcome: 'auto-merge-disabled'` を返す）。完全に手で外したい
-場合は `src/activities/github/merge-pr.ts` の `--auto` 引数を消してください。
+## Known limitations
 
-## 既知の制約
-
-- `workdir` がローカル FS にあるため、ある Refactor の処理は同一 Pod 内で完結する必要がある。
-  Worker をスケールするときは「同 Workflow は同 Pod に貼り付く」ことが保証される構成にするか、
-  `workdir` を共有ボリュームに置くか、子 Workflow で再 clone する設計に変更する。
-- `codex` CLI のフラグは公開ドキュメント時点のもの。バージョン差異がある場合は
-  `src/activities/_internal/run-codex.ts` を調整する。`--sandbox` の値は
-  `read-only` / `workspace-write` のみを使用（advisor は read-only、refactor 役割は workspace-write）。
-- **Replay 履歴フィクスチャは未整備**: 新規 Activity (`observePRStateActivity`,
-  `consultAdvisorActivity`) や `sleep()` の追加で履歴フォーマットが変わっている。
-  `tests/fixtures/replay/` に実 Worker から取得した履歴を保存し、
-  [Worker.runReplayHistory](https://docs.temporal.io/develop/typescript/testing-suite#replay-test)
-  で互換性チェックする pipeline を CI に追加すると、長寿命 Workflow の
-  バージョン更新が安全になる。
-- Advisor の `verdict='change-strategy'` は現状 `retry` 同様に扱う（情報は audit
-  に記録されるだけ）。将来的に「PR を draft に切り替え」などの具体的アクションを
-  ハンドリングするなら、新しい workflow 分岐を追加する余地がある。
+- **workdir is pod-local**: The parent Workflow's `workdir` is reused by child Workflows on the assumption they run on the same Worker pod. When scaling, either pin a Workflow to a pod, use a shared volume for `workdir`, or re-clone in each child.
+- **codex CLI flags are version-sensitive**: Arguments are based on the documented API at build time. Pin the version in CI; absorb breaking changes in `src/activities/_internal/run-codex.ts` and `run-codex-app-server.ts`.
+- **Replay fixtures not set up**: `tests/fixtures/replay/` is a placeholder. Adding `Worker.runReplayHistory` tests to CI would make versioning long-lived Workflows (especially `pr-lifecycle.ts`) safe.
+- **`change-strategy` verdict is treated as `retry`**: The advisor can return `change-strategy` but the current implementation handles it identically to `retry` (the suggestion is recorded in the audit log only). A future branch could implement concrete actions like converting the PR to a draft.

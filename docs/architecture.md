@@ -1,6 +1,6 @@
-# アーキテクチャ
+# Architecture
 
-## 全体構成
+## Overview
 
 ```mermaid
 flowchart LR
@@ -20,88 +20,83 @@ flowchart LR
     Step -.->|"poll<br/>task queue"| Activities
     Robust -.->|"poll<br/>task queue"| Activities
 
-    Activities -->|gh CLI / git / codex / advisor codex| External[(GitHub<br/>+ codex API)]
+    Activities -->|gh CLI / git / codex app-server| External[(GitHub<br/>+ codex API)]
 ```
 
-> 現在の実装は定期リファクタリング 1 本に絞っており、コード生成側は codex のみ。
-> Issue 駆動ルートや別 LLM (claude など) を後で追加したくなったら、
-> `refactorStepWorkflow`（implement→review ループ）と `robustPRMergeWorkflow`（push→CI→merge）
-> をリユーザブルな子ワークフローとしてそのまま再利用できる。
+> The current implementation is focused on periodic refactoring via codex.  
+> `refactorStepWorkflow` (implement → review loop) and `robustPRMergeWorkflow` (push → CI → merge)  
+> are designed as reusable child workflows, making it straightforward to add issue-driven routes later.
 
 ---
 
-## Activity ディレクトリ構成
+## Activity directory structure
 
-`src/activities/` は **「1 ファイル = 1 Activity」** が原則。複数 Activity に共有される
-非 Activity ヘルパーはクラスタ直下の `_internal/` に閉じ込め、`activities/index.ts`
-バレルからは再 export しない。クラスタは関心の塊で分け、必要に応じてさらに
-ネストする。
+`src/activities/` follows a **one file = one Activity** rule. Helpers shared across Activities live in `_internal/` and are not re-exported from `activities/index.ts`. Clusters are split by concern and nested as needed.
 
 ```
 src/activities/
-├── index.ts                       # Worker が登録する Activity の barrel
-├── _internal/                     # クラスタ横断の共有ヘルパー (非 Activity)
-│   ├── exec.ts                    # 子プロセス起動 (heartbeat + cancellation)
-│   └── run-codex.ts               # `codex exec` ラッパ + 429 検知 (sandbox 切替対応)
+├── index.ts                       # Barrel — Activities registered with the Worker
+├── _internal/                     # Cross-cluster shared helpers (not Activities)
+│   ├── exec.ts                    # Child-process spawner (heartbeat + cancellation)
+│   ├── run-codex.ts               # codex transport selector + rate-limit detection
+│   ├── run-codex-app-server.ts    # WebSocket JSON-RPC 2.0 client for codex app-server
+│   └── codex-app-server-process.ts# In-process codex app-server lifecycle manager
 │
-├── advisor/                       # 上位モデル相談 (read-only sandbox)
-│   ├── index.ts
+├── advisor/                       # Upper-model consult
 │   └── advisor.ts                 # consultAdvisorActivity
 │
-├── codex/                         # 汎用シングルショット codex
-│   ├── index.ts
-│   └── codex.ts                   # codexActivity (CI 自己修復・コンフリクト解消用)
+├── codex/                         # Generic single-shot codex
+│   └── codex.ts                   # codexActivity (CI self-heal / conflict resolution)
 │
-├── git/                           # ワークスペース + git plumbing
-│   ├── index.ts
+├── git/                           # Workspace + git plumbing
 │   ├── _internal/
-│   │   └── git-env.ts             # ghAuthEnv / ref ヘルパー
+│   │   └── git-env.ts             # ghAuthEnv / ref helpers
 │   ├── clone.ts                   # cloneRepoActivity
 │   ├── commit.ts                  # commitAllActivity
 │   ├── push.ts                    # pushBranchActivity
 │   ├── check-conflict.ts          # checkConflictActivity
 │   ├── cleanup.ts                 # cleanupWorkspaceActivity
 │   ├── diff-stat.ts               # diffStatActivity (Pre-Parliament gate)
-│   ├── diff-text.ts               # diffTextActivity (reviewer 入力)
+│   ├── diff-text.ts               # diffTextActivity (reviewer input)
 │   ├── status-porcelain.ts        # statusPorcelainActivity (drift baseline)
 │   └── restore.ts                 # restoreActivity (rollback / drift revert)
 │
-├── github/                        # gh CLI 経由
-│   ├── index.ts
+├── github/                        # gh CLI
 │   ├── _internal/
 │   │   ├── gh-env.ts              # ghEnv + sleepCancellable
-│   │   ├── gh-json.ts             # JSON エラー型
-│   │   ├── ci-rollup.ts           # statusCheckRollup の解釈
-│   │   └── pr-view.ts             # gh pr view の戻り値パース
+│   │   ├── gh-json.ts             # JSON error types
+│   │   ├── ci-rollup.ts           # statusCheckRollup interpretation
+│   │   └── pr-view.ts             # gh pr view response parser
 │   ├── create-pr.ts               # createPRActivity
-│   ├── wait-for-ci.ts             # waitForCIActivity (state も同時取得)
+│   ├── wait-for-ci.ts             # waitForCIActivity (statusCheckRollup + state polling)
 │   ├── fetch-failed-logs.ts       # fetchFailedRunLogsActivity
 │   ├── merge-pr.ts                # mergePRActivity (--auto)
-│   └── observe-pr-state.ts        # observePRStateActivity (post-merge poll)
+│   └── observe-pr-state.ts        # observePRStateActivity (pre-merge gate / post-merge poll)
 │
-└── refactor/                      # codex の役割別 Activity
-    ├── index.ts
+└── refactor/                      # Role-specific codex Activities
     ├── _internal/
     │   ├── types.ts               # ContextArtifact / PlanStep / etc.
-    │   ├── prompts.ts             # 役割別プロンプト (静的先頭 / 動的末尾)
-    │   └── parsers.ts             # JSON パーサ (extract / plan / review)
+    │   ├── prompts.ts             # Role prompts (static prefix / dynamic suffix)
+    │   └── parsers.ts             # JSON parsers (extract / plan / review)
     ├── extract-context.ts         # extractContextArtifactActivity
     ├── plan.ts                    # planActivity
     ├── implement.ts               # implementActivity
     └── review.ts                  # reviewActivity
 ```
 
-### クラスタの依存関係
+### Cluster dependencies
 
 ```mermaid
 flowchart TB
-    subgraph shared["_internal (cluster-wide)"]
-        Exec[exec.ts<br/>execCommand / execOrThrow]
-        RunCodex["run-codex.ts<br/>runCodexExec<br/>(--sandbox 切替 + 429 検知)"]
+    subgraph shared["_internal (cross-cluster)"]
+        Exec[exec.ts]
+        RunCodex["run-codex.ts<br/>(transport selector + rate-limit)"]
+        AppServer["run-codex-app-server.ts<br/>(WebSocket JSON-RPC client)"]
+        ProcMgr["codex-app-server-process.ts<br/>(in-process lifecycle)"]
     end
 
     subgraph advisor_cluster["advisor/"]
-        AdvAct["consultAdvisorActivity<br/>(read-only sandbox)"]
+        AdvAct[consultAdvisorActivity]
     end
 
     subgraph codex_cluster["codex/"]
@@ -114,13 +109,13 @@ flowchart TB
     end
 
     subgraph github_cluster["github/"]
-        GhInternals["_internal<br/>(gh-env / gh-json /<br/>ci-rollup / pr-view)"]
+        GhInternals["_internal<br/>(gh-env / gh-json / ci-rollup / pr-view)"]
         GhActs["create-pr / wait-for-ci /<br/>fetch-failed-logs / merge-pr /<br/>observe-pr-state"]
     end
 
     subgraph refactor_cluster["refactor/"]
         RefInternals["_internal<br/>(types / prompts / parsers)"]
-        RefActs["extract-context / plan /<br/>implement / review"]
+        RefActs["extract-context / plan / implement / review"]
     end
 
     GitActs --> GitEnv
@@ -130,38 +125,42 @@ flowchart TB
     RefActs --> RefInternals
     RefActs --> RunCodex
     CodexAct --> RunCodex
-    CodexAct --> Exec
     AdvAct --> RunCodex
+    RunCodex --> AppServer
     RunCodex --> Exec
     GitEnv --> Exec
+    ProcMgr -.->|"started by worker.ts"| AppServer
 ```
 
-`_internal/` の中身は同じクラスタ内のみで使う。クロスクラスタ参照は
-`activities/_internal/` に置いた共有 (`exec` / `run-codex`) のみ許す。
+`_internal/` contents are used only within the same cluster. Cross-cluster sharing is limited to `activities/_internal/` (`exec`, `run-codex`, `run-codex-app-server`, `codex-app-server-process`).
 
 ---
 
-## Workflow の責務
+## codex transport
+
+`runCodexExec` in `_internal/run-codex.ts` selects the transport at call time:
+
+- **App-server mode** (default when `CODEX_APP_SERVER_URL` is set): connects to a running `codex app-server` via WebSocket JSON-RPC 2.0. The server is started in-process by `worker.ts` on startup (`startCodexAppServerProcess`). `auth.json` must be mounted in the **worker container**.
+- **Subprocess fallback** (when `CODEX_APP_SERVER_URL` is unset and the in-process start fails): spawns `codex exec` directly. `auth.json` must be at `$HOME/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
+
+All codex invocations use `dangerFullAccess` sandbox (`sandboxPolicy: { type: 'dangerFullAccess' }` for app-server; `--sandbox danger-full-access` for subprocess). The Pod is the isolation boundary — it runs non-root with restricted network egress. bubblewrap-based sandbox modes (`workspace-write`, `read-only`) are not used because they require unprivileged user-namespace support that varies by cluster.
+
+---
+
+## Workflow responsibilities
 
 ### `periodicRefactorWorkflow`
 
-5 フェーズ + ステップループ + finally のフロー。守りどころ（リターン経路 / 巻き戻し /
-finally）だけを残して、ガード判定・ハウスキープ Activity は省略しています。詳細は
-コード（`src/workflows/periodic.ts`）を参照。
+The orchestrator. Runs five phases: clone → context → plan → step-loop → PR handoff, with a `finally` cleanup block.
 
-オーケストレーター本体（`periodic.ts`）は clone → context → plan → step-loop → handoff
-の流れだけを保持し、各ステップの implement→Parliament→drift-audit→critical_block ハンドリングは
-**`refactorStepWorkflow`（子）** に委譲する（`executeChild` で 1 step につき 1 子ワークフロー）。
-親は残予算（spawn / advisor）を子に渡し、子は戻り値で消費量を返す → 親が自分のカウンタへ加算する
-delta sync 方式。PR body 生成は `_internal/refactor-report.ts` の `renderReport()`、
-codex spawn 上限は `_internal/spawn-budget.ts` の `SpawnCounter` がそれぞれ担当。
+The step loop delegates each step's implement → Parliament → drift-audit → critical_block handling to `refactorStepWorkflow` (one child per step via `executeChild`). The parent passes remaining `spawnBudget` / `advisorBudget` to each child and accumulates the deltas returned in the child's output (delta-sync pattern). PR body generation is handled by `_internal/refactor-report.ts` (`renderReport()`); spawn accounting is handled by `_internal/spawn-budget.ts` (`SpawnCounter`).
 
 ```mermaid
 flowchart TD
     Start([start]) --> Clone[① clone]
     Clone --> Ctx[② context]
     Ctx --> Plan[③ plan]
-    Plan -->|no-op / 空| RetSkip([skipped]):::ret
+    Plan -->|no-op / empty| RetSkip([skipped]):::ret
     Plan --> StepLoop[④ for each step<br/>≤2 steps]
 
     StepLoop -->|executeChild| Step["refactorStepWorkflow<br/>(child, per step)"]
@@ -183,30 +182,29 @@ flowchart TD
     classDef finally fill:#fee,stroke:#a00,color:#400
 ```
 
-省略している保守ロジック（ガード）— コードに存在するが図上は隠している:
-
-- 親は子起動前に `SpawnCounter.remaining()` をチェックし、0 なら step ループを抜ける
-- 子の戻り値の `spawnCounts` / `advisorConsumed` を親のカウンタへ加算（delta sync）
-- `dropped-not-converged` のとき、親が `statusPorcelain` で残った差分を `restore` してから次 step へ
+Guards omitted from the diagram (present in `periodic.ts`):
+- Parent checks `SpawnCounter.remaining()` before each child launch; exits loop if 0.
+- Child's `spawnCounts` / `advisorConsumed` are delta-synced into parent counters after each child completes.
+- On `dropped-not-converged`, parent calls `statusPorcelain` + `restore` to clean up before the next step.
 
 #### Spawn budget
 
-ワークフロー側で `SpawnCounter` が **`DEFAULT_PERIODIC_SPAWN_CAP = 16`** を強制する。
-ワーストケース: `1 (context) + 1 (plan) + 2 steps × 2 iter × (1 implement + 2 reviewers) = 14`、
-リトライバッファ +2。親が子に渡す `spawnBudget` は親の残数。
-超過時は新規 spawn を停止し、現状を Phase 3 でレポート。
+`SpawnCounter` enforces `DEFAULT_PERIODIC_SPAWN_CAP = 16`.  
+Worst case: `1 (context) + 1 (plan) + 2 steps × 2 iter × (1 implement + 2 reviewers) = 14`, with +2 retry buffer.  
+When the cap is reached, no further spawns occur and the current state is reported in Phase 3.
 
-### `refactorStepWorkflow` (Child — per step)
+---
 
-`periodicRefactorWorkflow` から `executeChild` で 1 step につき 1 回起動される子ワークフロー。
-将来 Issue 駆動オーケストレーターを追加する場合も、同じ子をそのまま再利用できる。
+### `refactorStepWorkflow` (child — per step)
+
+Launched once per plan step by `executeChild`. Can be reused as-is by any future orchestrator.
 
 ```mermaid
 flowchart TD
     Start([start: step + budgets]) --> Loop[iter loop ≤ maxIter]
     Loop --> Impl[implementActivity]
     Impl --> Snap[statusPorcelain]
-    Snap -->|前回と同一| RBNoProg[restore step files] --> ResNoProg([kind=completed<br/>outcome=dropped-no-progress]):::ret
+    Snap -->|same as previous| RBNoProg[restore step files] --> ResNoProg([kind=completed<br/>outcome=dropped-no-progress]):::ret
     Snap --> Gate{trivial diff?}
     Gate -->|yes| ResTriv([kind=completed<br/>outcome=parliament-skipped]):::ret
     Gate -->|no| Budget{spawn budget<br/>≥ reviewers?}
@@ -225,20 +223,22 @@ flowchart TD
     classDef ret fill:#dff,stroke:#06a,color:#024
 ```
 
-戻り値:
+Return value fields:
 
-| field | 型 | 意味 |
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `kind` | `'completed' \| 'budget-halted' \| 'circuit-broken'` | 親が次 step に進むか中断するかの判断 |
-| `record` | `StepRecord?` | `kind === 'budget-halted'` のときのみ undefined |
-| `circuitBroken` | `CircuitBreaker?` | `kind === 'circuit-broken'` のときのみ |
-| `spawnCounts` | `Record<string, number>` | 子で消費した codex 呼び出し数（role 別） |
-| `advisorConsumed` | `number` | 子で消費した advisor consult 回数 |
-| `advisorAudits` | `AdvisorAuditEntry[]` | 子で発生した advisor consult の監査エントリ |
+| `kind` | `'completed' \| 'budget-halted' \| 'circuit-broken'` | Whether the parent should continue to the next step |
+| `record` | `StepRecord?` | Undefined only when `kind === 'budget-halted'` |
+| `circuitBroken` | `CircuitBreaker?` | Set only when `kind === 'circuit-broken'` |
+| `spawnCounts` | `Record<string, number>` | codex calls consumed by this child, by role |
+| `advisorConsumed` | `number` | Advisor consults consumed by this child |
+| `advisorAudits` | `AdvisorAuditEntry[]` | Audit entries for advisor consults in this child |
 
-`workdir` は親が確保したパスを子へそのまま渡す（同 Pod 上で動作する前提は変わらない）。
+`workdir` is passed from the parent and used as-is (both run on the same Worker pod).
 
-### `robustPRMergeWorkflow` (Child)
+---
+
+### `robustPRMergeWorkflow` (child)
 
 ```mermaid
 flowchart TD
@@ -274,113 +274,82 @@ flowchart TD
     classDef ret fill:#dff,stroke:#06a,color:#024
 ```
 
-`maxFixIterations` に達するまで CI 失敗・コンフリクトを修復する。
-Advisor は `maxAdvisorConsults`（既定 2）が上限。各 advisor 呼び出しは
-事前に集約済みのサマリー（≤ 2 KiB）のみを上位モデルに渡し、`{verdict, rationale, suggestedAction}`
-を返す。verdict が `abort` のときのみ workflow を停止し、`retry` / `change-strategy`
-は次の self-heal を続行する（提案は PR body・ログに記録）。
+Repairs CI failures and conflicts up to `maxFixIterations`. The advisor is called at most `maxAdvisorConsults` times (default 2) — once for CI self-heal (when `iter ≥ 2`) and once for no-diff. Each advisor call receives only a pre-aggregated summary (≤ 2 KiB). Only `verdict: abort` stops the workflow; `retry` and `change-strategy` continue to the next self-heal (the suggestion is recorded in the audit log and PR body).
 
-#### 新しい終了ステータス
+#### `RobustPRMergeOutput.outcome` values
 
-`RobustPRMergeOutput.outcome` で `gh pr merge --auto` の挙動と外部干渉を区別する:
-
-| outcome | 意味 | merged フラグ |
+| Outcome | Meaning | `merged` flag |
 | --- | --- | --- |
-| `merged` | merge が実際に landed（`mergedAt` を観測） | true |
-| `merge-queued` | gh が `--auto` を受理したが、protection の up-to-date 待ちなど未完了 | false |
-| `auto-merge-disabled` | 呼び出し側が `autoMerge=false` で停止 | false |
-| `closed-externally` | 別 PR / 人間が PR を Close した | false |
-| `merged-externally` | base force-push や手動 merge で観測 MERGED | true |
+| `merged` | Merge landed — `mergedAt` was observed | `true` |
+| `merge-queued` | `--auto` accepted by gh but protection gate not yet cleared | `false` |
+| `auto-merge-disabled` | Caller passed `autoMerge: false` | `false` |
+| `closed-externally` | PR was closed by another PR or a person | `false` |
+| `merged-externally` | Base force-push or manual merge — MERGED observed | `true` |
 
-`closed-externally` / `merged-externally` は throw せず正常終了する。CI 待機中に
-`gh pr view --json state` で OPEN/CLOSED/MERGED を毎ポーリング読み取り、
-状態遷移を early-exit に変換することで「自分の PR より先に他の PR が merge された」
-ケースを安全に処理する。
+`closed-externally` and `merged-externally` return normally (no throw). Each CI poll reads `gh pr view --json state` to detect external OPEN/CLOSED/MERGED transitions, converting them into early exits.
 
 ---
 
-## Activity Proxy の対応
+## Activity proxy mapping
 
-| Proxy | startToCloseTimeout | retry | 主な使用 Activity |
+| Proxy | `startToCloseTimeout` | Retries | Activities |
 | --- | --- | --- | --- |
-| `cheap` | 2m | 5回, exp ×2, max 30s | git の軽量 plumbing、gh 単発 read |
-| `heavy` | 20m | 4回, exp ×2, max 5m | clone, push |
-| `contextCodex` / `planCodex` / `reviewCodex` | 5m | 5回, exp ×3, max 10m | codex 役割活動 (短時間) |
-| `implementCodex` | 30m | 5回, exp ×3, max 10m | codex 役割活動 (実装、長時間) |
-| `heavyCodex` | 90m | 5回, exp ×3, max 10m | pr-lifecycle の CI 自己修復・コンフリクト解消 |
-| `advisor` | 4m | 3回, exp ×2, max 2m | consultAdvisorActivity (上位モデル相談) |
-| `ciWait` | 70m | 3回 | waitForCIActivity (heartbeat + ポーリング) |
+| `cheap` | 2 m | 5×, exp ×2, max 30 s | lightweight git plumbing, single gh reads |
+| `heavy` | 20 m | 4×, exp ×2, max 5 m | clone, push |
+| `contextCodex` / `planCodex` / `reviewCodex` | 5 m | 5×, exp ×3, max 10 m | short codex roles |
+| `implementCodex` | 30 m | 5×, exp ×3, max 10 m | implement role (longer) |
+| `heavyCodex` | 90 m | 5×, exp ×3, max 10 m | CI self-heal / conflict resolution in pr-lifecycle |
+| `advisor` | 4 m | 3×, exp ×2, max 2 m | consultAdvisorActivity |
+| `ciWait` | 70 m | 3× | waitForCIActivity (heartbeat + polling) |
 
-LLM 系 proxy は全て `codexQuotaFriendlyRetry` を共有し、429 / quota 系エラーを
-`RateLimited` 型として受けて指数バックオフで待つ (10 分上限・5 試行)。
-`PlannerOutputInvalid`, `MissingCredentials`, `InvalidGitRef` は
-`nonRetryableErrorTypes` に列挙して即失敗させる。
+All LLM proxies share `codexQuotaFriendlyRetry`: `RateLimited` errors get exponential backoff (up to 10 min, 5 attempts). `PlannerOutputInvalid`, `MissingCredentials`, and `InvalidGitRef` are in `nonRetryableErrorTypes` — they fail immediately regardless of proxy retry policy.
 
 ---
 
-## Advisor consults（上位モデル相談）
+## Advisor consults
 
-Advisor は **「迷ったときに上位モデルに薄く意見を聞く」** ための単一 Activity
-（`consultAdvisorActivity`）。実体は `codex exec --model $ADVISOR_MODEL --sandbox read-only`
-の薄いラッパーで、コードを書き換えることはない。ワークフローからは
-`workflows/_internal/advisor.ts` の `consultAdvisor()` ヘルパー経由で呼ぶ。
+The advisor is a single Activity (`consultAdvisorActivity`) that queries a higher-capability model for a decision at specific workflow gates. It never modifies code — it only returns `{verdict, rationale, suggested_action}`. Workflows call it via `consultAdvisor()` in `workflows/_internal/advisor.ts`.
 
-### 起動条件（gate）
+### Invocation gates
 
-| Gate | 場所 | 既定動作 | advisor の verdict が効く場面 |
+| Gate | Location | Default behavior | Advisor effect |
 | --- | --- | --- | --- |
-| `ci-self-heal` | pr-lifecycle, iter ≥ 2 で CI red | self-heal を続行 | `abort` で workflow を停止（`AdvisorAbort`） |
-| `no-diff` | pr-lifecycle, codex が diff を出さなかった時 | `NoFixDiff` を throw | 監査記録のみ（throw は変えない） |
-| `critical-block` | periodic, reviewer が critical_block | 全 restore + 終了 | `retry` だけが効き、needs_revision に降格 |
+| `ci-self-heal` | pr-lifecycle, CI red at iter ≥ 2 | continue self-heal | `abort` throws `AdvisorAbort` |
+| `no-diff` | pr-lifecycle, codex produced no diff | throw `NoFixDiff` | audit record only (throw is unchanged) |
+| `critical-block` | periodic, reviewer returns `critical_block` | restore all + exit | only `retry` takes effect (demotes to `needs_revision`) |
 
-### I/O 契約
+### I/O contract
 
-入力（呼び出し側で集約済み・最大 ~2 KiB）:
-- `situation`: 1 行で「どの分岐点か」
-- `summary`: 失敗ジョブ名・上位 issue・iter 番号などの圧縮済みコンテキスト
-- `options`: workflow が選びうる候補（advisor がそれを参考にする）
+Input (aggregated by caller, ≤ ~2 KiB):
+- `situation`: one line describing the decision point
+- `summary`: compressed context (failed job names, top issues, iteration count, etc.)
+- `options`: candidate actions the workflow could take
 
-出力 JSON:
+Output JSON:
 ```json
 { "verdict": "retry" | "abort" | "change-strategy", "rationale": "...", "suggested_action": "..." }
 ```
 
-### 予算（budget）
+### Budget
 
-| Workflow | 既定 cap | 上書き |
+| Workflow | Default cap | Override |
 | --- | --- | --- |
-| `robustPRMergeWorkflow` | `maxAdvisorConsults = 2` | 入力で増減可 |
-| `periodicRefactorWorkflow` | `maxAdvisorConsults = 1` | 0 で完全無効化 |
+| `robustPRMergeWorkflow` | `maxAdvisorConsults = 2` | Configurable in input |
+| `periodicRefactorWorkflow` | `maxAdvisorConsults = 1` | `0` to disable entirely |
 
-`AdvisorBudget` は `_internal/advisor.ts` の workflow-local カウンタ。**activity を
-await する前に consume する** ため、activity が失敗してもカウントは消費される
-（指数的なリトライループを防ぐ意図）。
+`AdvisorBudget` is a workflow-local counter in `_internal/advisor.ts`. It is **consumed before the Activity is awaited**, so a failed activity still counts against the budget (this prevents exponential retry loops).
 
-### 失敗モード
+### Failure modes
 
-advisor の activity が `AdvisorOutputInvalid` を投げた / `RateLimited` リトライ
-が尽きた / 単に予算切れ — いずれの場合も `consultAdvisor()` は `reply: undefined`
-で audit エントリだけ返す。呼び出し側はそれを「相談しなかった」と等価に扱い、
-通常分岐（self-heal 続行 / 全 restore / NoFixDiff throw）にフォールスルーする。
+If `consultAdvisorActivity` throws `AdvisorOutputInvalid`, exhausts retries on `RateLimited`, or the budget is zero, `consultAdvisor()` returns `reply: undefined` with an audit entry. The caller treats this as "no consult" and falls through to the default branch (continue self-heal / restore all / throw `NoFixDiff`).
 
-### 監査トレース
+### Audit trace
 
-各 consult は `AdvisorAuditEntry { gate, situation, reply?, error? }` として
-収集され、`PeriodicRefactorOutput.advisorAudits` および
-`RobustPRMergeOutput.advisorAudits` に出力される。periodic の `renderReport`
-は PR body に **「## Advisor consults」** セクションを生成し、verdict と
-rationale を可視化する。子 workflow（pr-lifecycle）の consult は時系列上
-PR body 生成より後なので、PR body には載らず periodic 出力経由で観測する。
-
-### 環境変数
-
-`ADVISOR_MODEL` を Worker に設定すると codex がそのモデルで起動する。
-未設定なら codex のデフォルトモデルが使われ、advisor は事実上「同モデルでの
-2nd opinion」として動く。本番では Opus / GPT-5 級のモデルを推奨。
+Each consult is recorded as `AdvisorAuditEntry { gate, situation, reply?, error? }` and collected in `PeriodicRefactorOutput.advisorAudits` / `RobustPRMergeOutput.advisorAudits`. `renderReport()` adds an **"## Advisor consults"** section to the PR body showing verdict and rationale. Consults from pr-lifecycle occur after PR body generation, so they appear only in the workflow output, not in the PR body.
 
 ---
 
-## ContextArtifact パターン
+## ContextArtifact pattern
 
 ```mermaid
 flowchart LR
@@ -391,11 +360,7 @@ flowchart LR
     State --> Rev2[reviewActivity<br/>quality]
 ```
 
-ワークフロー初期に 1 回だけ codex を呼び、リポジトリのサマリー
-(`overview / conventions / interfaces`) を `ContextArtifact` として蒸留。
-以降の役割プロンプトは全てこの artifact を **静的プリアンブル** に含めるため、
-LLM プロバイダのプロンプトキャッシュが plan / implement / review 間で
-ヒットする (= 同一バイト列の prefix)。
+At workflow start, a single codex call distils a repository summary (`overview / conventions / interfaces`) into a `ContextArtifact`. All subsequent role prompts include this artifact as a **static preamble**, so the LLM provider's prompt cache hits across plan / implement / review calls within the same workflow run (same prefix bytes).
 
 ```
 [ STATIC, cacheable ]                                    [ DYNAMIC, per-call ]
@@ -408,196 +373,176 @@ LLM プロバイダのプロンプトキャッシュが plan / implement / revie
 
 ---
 
-## 取り扱う状態
+## State management
 
 ### Workspace
-`os.tmpdir()/repo-steward-workspaces/<repo>__<random>` に clone する。
-`cleanupWorkspaceActivity` が finally で必ず削除。
 
-`baseBranch` は shallow clone 後に `refs/remotes/origin/<baseBranch>` として明示的に fetch し、
-その remote-tracking ref から `agent/refactor/<workflow-id>` を作る。これにより、GitHub repo の
-default branch ではない `develop` / `release/*` などを Schedule の対象にしても、ローカル branch
-未作成による checkout 失敗を避ける。
+Repos are cloned to `os.tmpdir()/repo-steward-workspaces/<repo>__<random>` (or `$WORKSPACE_ROOT/<repo>__<random>` when `WORKSPACE_ROOT` is set). `cleanupWorkspaceActivity` removes it in the `finally` block.
 
-### Branch 命名
-`agent/refactor/<workflow-id>` 形式。Workflow ID は Schedule からの起動毎にユニーク。
+`baseBranch` is explicitly fetched as `refs/remotes/origin/<baseBranch>` after the shallow clone, and `agent/refactor/<workflow-id>` is checked out from that remote-tracking ref. This avoids `git checkout` failures on repos where `develop`, `release/*`, etc. are not the default branch.
+
+### Branch naming
+
+`agent/refactor/<workflow-id>` — unique per schedule invocation via `workflowInfo().workflowId`.
 
 ---
 
-## Determinism 上の注意
+## Determinism constraints
 
-- Workflow からは `Date.now()` / `Math.random()` / `process.env` / 直接 `fs` を呼ばない。
-- 待機は `proxyActivities` 越しの heartbeating activity か `sleep()` を使う（`setTimeout` は非推奨）。
-- ID は `workflowInfo().workflowId` から導出するか、Activity 側で生成して結果として返す。
-- Workflow ファイル直下に副作用のある top-level コードを書かない（`workflowInfo()` も関数内のみで呼ぶ）。
-- `extractContextArtifactActivity` の `generatedAt` は `workflowInfo().startTime` から導出 (deterministic)。
+- Workflows must not call `Date.now()`, `Math.random()`, `process.env`, or `fs` directly.
+- Use heartbeating Activities or `workflow.sleep()` for waiting. `setTimeout` is not safe in Workflows.
+- Generate IDs from `workflowInfo().workflowId` or return them from Activities.
+- Do not place side-effectful code at the top level of a workflow file. Even `workflowInfo()` must be called inside a function.
+- `extractContextArtifactActivity`'s `generatedAt` is derived from `workflowInfo().startTime` (deterministic).
 
 ---
 
 ## Activities catalog
 
-Worker が登録する全 Activity の一覧。`src/activities/index.ts` の barrel が
-ソース・オブ・トゥルース。proxy 列はワークフロー側の `proxyActivities` グループ
-（`src/workflows/proxies.ts`）で、retry / timeout は **Activity Proxy の対応**
-セクションを参照。
+All Activities registered with the Worker. `src/activities/index.ts` is the source of truth. The proxy column refers to the `proxyActivities` group in `src/workflows/proxies.ts`.
 
 ### `git/` — workspace + git plumbing
 
-| Activity | ファイル | proxy | 役割 |
+| Activity | File | Proxy | Role |
 | --- | --- | --- | --- |
-| `cloneRepoActivity` | `git/clone.ts` | `heavy` | shallow clone + `agent/refactor/<id>` ブランチ作成 |
-| `commitAllActivity` | `git/commit.ts` | `heavy` | `git add -A` + commit。空 diff は `committed: false` |
-| `pushBranchActivity` | `git/push.ts` | `heavy` | `git push` (`-u` / `--force-with-lease` 切替可) |
-| `checkConflictActivity` | `git/check-conflict.ts` | `cheap` | base に対する trial merge → 衝突ファイル列挙 |
-| `cleanupWorkspaceActivity` | `git/cleanup.ts` | `cheap` | finally で workdir を削除 |
-| `diffStatActivity` | `git/diff-stat.ts` | `cheap` | Pre-Parliament gate 用の `--shortstat` |
-| `diffTextActivity` | `git/diff-text.ts` | `cheap` | reviewer に渡す diff 本文（`maxBytes` 切詰め） |
-| `statusPorcelainActivity` | `git/status-porcelain.ts` | `cheap` | drift 検知用 porcelain スナップショット |
-| `restoreActivity` | `git/restore.ts` | `cheap` | `paths` 指定なし → 全ファイル restore（critical_block 用） |
+| `cloneRepoActivity` | `git/clone.ts` | `heavy` | Shallow clone + create `agent/refactor/<id>` branch |
+| `commitAllActivity` | `git/commit.ts` | `heavy` | `git add -A` + commit. Returns `committed: false` on empty diff |
+| `pushBranchActivity` | `git/push.ts` | `heavy` | `git push` (supports `-u` / `--force-with-lease`) |
+| `checkConflictActivity` | `git/check-conflict.ts` | `cheap` | Trial merge against base → list conflicting files |
+| `cleanupWorkspaceActivity` | `git/cleanup.ts` | `cheap` | Delete workdir in finally block |
+| `diffStatActivity` | `git/diff-stat.ts` | `cheap` | `--shortstat` for Pre-Parliament gate |
+| `diffTextActivity` | `git/diff-text.ts` | `cheap` | Full diff text for reviewers (truncated at `maxBytes`) |
+| `statusPorcelainActivity` | `git/status-porcelain.ts` | `cheap` | Porcelain snapshot for drift detection |
+| `restoreActivity` | `git/restore.ts` | `cheap` | Without `paths`: restore all files (critical_block rollback) |
 
 ### `github/` — gh CLI
 
-| Activity | ファイル | proxy | 役割 |
+| Activity | File | Proxy | Role |
 | --- | --- | --- | --- |
-| `createPRActivity` | `github/create-pr.ts` | `cheap` | `gh pr create` + view で `{number, url}` 取得 |
-| `waitForCIActivity` | `github/wait-for-ci.ts` | `ciWait` | `statusCheckRollup` + `state` を polling。external close/merge も検知 |
-| `fetchFailedRunLogsActivity` | `github/fetch-failed-logs.ts` | `cheap` | `gh run view --log-failed` (codex への入力) |
+| `createPRActivity` | `github/create-pr.ts` | `cheap` | `gh pr create` + view to get `{number, url}` |
+| `waitForCIActivity` | `github/wait-for-ci.ts` | `ciWait` | Poll `statusCheckRollup` + `state`. Detects external close/merge |
+| `fetchFailedRunLogsActivity` | `github/fetch-failed-logs.ts` | `cheap` | `gh run view --log-failed` (input to codex self-heal) |
 | `mergePRActivity` | `github/merge-pr.ts` | `cheap` | `gh pr merge --auto --squash --delete-branch` |
-| `observePRStateActivity` | `github/observe-pr-state.ts` | `cheap` | `gh pr view --json state,mergedAt`（pre-merge gate / post-merge poll で利用） |
+| `observePRStateActivity` | `github/observe-pr-state.ts` | `cheap` | `gh pr view --json state,mergedAt` (pre-merge gate + post-merge poll) |
 
-### `codex/` / `refactor/` / `advisor/` — LLM 系
+### `codex/` / `refactor/` / `advisor/` — LLM
 
-| Activity | ファイル | proxy | sandbox | 役割 |
-| --- | --- | --- | --- | --- |
-| `codexActivity` | `codex/codex.ts` | `heavyCodex` | workspace-write | pr-lifecycle の CI 自己修復・コンフリクト解消 |
-| `extractContextArtifactActivity` | `refactor/extract-context.ts` | `contextCodex` | workspace-write | repo summary を蒸留（workflow 開始時 1 回） |
-| `planActivity` | `refactor/plan.ts` | `planCodex` | workspace-write | テーマ + ≤2 ステップに分解。Read-only 想定 |
-| `implementActivity` | `refactor/implement.ts` | `implementCodex` | workspace-write | 1 ステップを working tree に適用 |
-| `reviewActivity` | `refactor/review.ts` | `reviewCodex` | workspace-write | concern 別 reviewer (correctness / quality)。プロンプトで read-only 強制 + drift audit でも担保 |
-| `consultAdvisorActivity` | `advisor/advisor.ts` | `advisor` | **read-only** | 上位モデル相談（gate ベース。budget で上限） |
+| Activity | File | Proxy | Role |
+| --- | --- | --- | --- |
+| `codexActivity` | `codex/codex.ts` | `heavyCodex` | CI self-heal and conflict resolution in pr-lifecycle |
+| `extractContextArtifactActivity` | `refactor/extract-context.ts` | `contextCodex` | Distil repo summary once at workflow start |
+| `planActivity` | `refactor/plan.ts` | `planCodex` | Decompose theme into ≤2 steps |
+| `implementActivity` | `refactor/implement.ts` | `implementCodex` | Apply one step to the working tree |
+| `reviewActivity` | `refactor/review.ts` | `reviewCodex` | Per-concern reviewer (correctness / quality) |
+| `consultAdvisorActivity` | `advisor/advisor.ts` | `advisor` | Upper-model consult (gate-based, budget-capped) |
 
 ---
 
 ## Configuration reference
 
-Worker が読む環境変数と、Workflow / Schedule に渡す入力フィールドを 1 箇所にまとめる。
-`.env.example` がキー一覧の正、本セクションは説明と既定値の正。
+### Worker environment variables
 
-### Worker 環境変数
-
-| Variable | 必須? | 既定値 | 用途 |
+| Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `TEMPORAL_ADDRESS` | yes | `localhost:7233` | Temporal Frontend gRPC エンドポイント |
-| `TEMPORAL_NAMESPACE` | no | `default` | Temporal 名前空間 |
-| `TEMPORAL_TASK_QUEUE` | no | `repo-steward` | Worker / Client が共有するキュー名 |
-| `TEMPORAL_TLS` | no | `false` | `true` で mTLS を有効化 |
-| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | no | `4` | Activity スロット数（codex の並列度に直結） |
-| `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | no | `20` | Workflow タスクスロット数 |
-| `NODE_ENV` | no | (unset) | `production` のとき pre-built bundle が無いと起動失敗 |
-| `GITHUB_TOKEN` | yes | — | `gh` / `git push` の認証。fine-grained PAT 推奨 |
-| `GIT_BOT_NAME` | yes | — | auto-commit の `user.name`。未設定なら `MissingCredentials` で起動失敗 |
-| `GIT_BOT_EMAIL` | yes | — | auto-commit の `user.email`。未設定なら `MissingCredentials` で起動失敗 |
-| `CODEX_HOME` | no | `~/.codex` | `auth.json` を別パスにマウントする時に上書き |
-| `ADVISOR_MODEL` | no | (unset → codex デフォルト) | `consultAdvisorActivity` が `codex exec --model` に渡すモデル名 |
+| `TEMPORAL_ADDRESS` | yes | `localhost:7233` | Temporal Frontend gRPC endpoint |
+| `TEMPORAL_NAMESPACE` | no | `default` | Temporal namespace |
+| `TEMPORAL_TASK_QUEUE` | no | `repo-steward` | Shared queue name for Worker and Client |
+| `TEMPORAL_TLS` | no | `false` | Set `true` to enable mTLS |
+| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | no | `4` | Activity slot count (directly affects codex parallelism) |
+| `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | no | `20` | Workflow task slot count |
+| `NODE_ENV` | no | (unset) | `production` requires a pre-built workflow bundle |
+| `GITHUB_TOKEN` | yes | — | Auth for `gh` and `git push`. Fine-grained PAT recommended |
+| `GIT_BOT_NAME` | yes | — | `user.name` for auto-commits. Missing → `MissingCredentials` at startup |
+| `GIT_BOT_EMAIL` | yes | — | `user.email` for auto-commits. Missing → `MissingCredentials` at startup |
+| `CODEX_HOME` | no | `~/.codex` | Override the directory where `auth.json` is read |
+| `CODEX_APP_SERVER_URL` | no | (auto) | WebSocket URL of the codex app-server. Set automatically by `worker.ts` when the in-process server starts. Override to point at an external server |
+| `WORKSPACE_ROOT` | no | `os.tmpdir()/repo-steward-workspaces` | Root directory for cloned repos. Set to a mounted volume path when you want size-limited workspace storage |
+| `ADVISOR_MODEL` | no | (codex default) | Model name passed to `codex --model` for advisor consults. Use Opus or equivalent in production |
 
-### `periodicRefactorWorkflow` 入力 (`PeriodicRefactorInput`)
+### `periodicRefactorWorkflow` input (`PeriodicRefactorInput`)
 
-| Field | 型 | 既定値 | 説明 |
+| Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repoFullName` | `string` | (必須) | `owner/name` 形式 |
-| `baseBranch` | `string?` | `main` | clone 時に fetch する base ref |
-| `refactorBrief` | `string?` | (なし) | planner に渡すユーザー指示。空なら planner が自由にテーマ選択 |
-| `autoMerge` | `boolean?` | `true` | `false` で child を merge 直前まで止める |
-| `maxAdvisorConsults` | `number?` | `1` | advisor を呼べる回数。`0` で完全無効化 |
+| `repoFullName` | `string` | required | `owner/name` |
+| `baseBranch` | `string?` | `main` | Base ref to clone and target for merge |
+| `refactorBrief` | `string?` | (none) | User instructions passed to the planner. If empty, the planner selects the theme freely |
+| `autoMerge` | `boolean?` | `true` | `false` stops just before merge, returning `outcome: 'auto-merge-disabled'` |
+| `maxAdvisorConsults` | `number?` | `1` | Maximum advisor consult calls. `0` disables entirely |
 
-### `refactorStepWorkflow` 入力 (`RefactorStepInput`)
+### `refactorStepWorkflow` input (`RefactorStepInput`)
 
-| Field | 型 | 既定値 | 説明 |
+| Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `step` | `PlanStep` | (必須) | planner が出した 1 ステップの定義 |
-| `workdir` | `string` | (必須) | 親が確保した workdir。同 Pod 上で利用 |
-| `contextArtifact` | `ContextArtifact` | (必須) | プロンプトキャッシュ用の repo summary |
-| `spawnBudget` | `number` | (必須) | 子が消費可能な codex 呼び出し数（親の残数） |
-| `advisorBudget` | `number` | (必須) | 子が消費可能な advisor consult 数（親の残数） |
-| `config` | `StepLoopConfig` | (必須) | `maxIter` / `trivialLineThreshold` / `reviewerConcerns` 等 |
+| `step` | `PlanStep` | required | One step from the planner's output |
+| `workdir` | `string` | required | Workspace path provisioned by the parent |
+| `contextArtifact` | `ContextArtifact` | required | Repo summary for prompt-cache prefix |
+| `spawnBudget` | `number` | required | codex calls this child may consume (parent's remaining count) |
+| `advisorBudget` | `number` | required | Advisor consults this child may consume |
+| `config` | `StepLoopConfig` | required | `maxIter`, `trivialLineThreshold`, `reviewerConcerns`, etc. |
 
-戻り値（`RefactorStepOutput`）の field については上記のフロー図と表を参照。
-親はこれを受けて `SpawnCounter.consume()` / `AdvisorBudget.addConsumed()` に
-delta sync し、`advisorAudits` を append する。
+See the flow diagram and return-value table above for `RefactorStepOutput` fields.  
+After each child completes, the parent calls `SpawnCounter.consume()` and `AdvisorBudget.addConsumed()` with the deltas, and appends `advisorAudits`.
 
-### `robustPRMergeWorkflow` 入力 (`RobustPRMergeInput`)
+### `robustPRMergeWorkflow` input (`RobustPRMergeInput`)
 
-| Field | 型 | 既定値 | 説明 |
+| Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `repoFullName` | `string` | (必須) | `owner/name` |
-| `workdir` | `string` | (必須) | 親が確保した workdir。同 Pod 上で利用 |
-| `branch` | `string` | (必須) | push 対象の branch |
-| `baseBranch` | `string` | (必須) | merge 先 |
-| `prTitle` / `prBody` | `string` | (必須) | PR の表示テキスト |
-| `maxFixIterations` | `number?` | `8` | CI 修復 + コンフリクト解消の合計上限 |
-| `autoMerge` | `boolean?` | `true` | `false` で `outcome: 'auto-merge-disabled'` で終了 |
-| `maxAdvisorConsults` | `number?` | `2` | advisor 上限。`ci-self-heal` と `no-diff` で 1 ずつ消費 |
-| `postMergePollAttempts` | `number?` | `6` | merge 確認 poll の最大回数 |
-| `postMergePollIntervalMs` | `number?` | `10_000` | poll 間隔（ミリ秒） |
+| `repoFullName` | `string` | required | `owner/name` |
+| `workdir` | `string` | required | Workspace path provisioned by the parent |
+| `branch` | `string` | required | Branch to push |
+| `baseBranch` | `string` | required | Merge target |
+| `prTitle` / `prBody` | `string` | required | PR display text |
+| `maxFixIterations` | `number?` | `8` | Combined CI self-heal + conflict resolution iteration cap |
+| `autoMerge` | `boolean?` | `true` | `false` → `outcome: 'auto-merge-disabled'` |
+| `maxAdvisorConsults` | `number?` | `2` | Advisor cap (`ci-self-heal` and `no-diff` each consume one) |
+| `postMergePollAttempts` | `number?` | `6` | Maximum merge-observation poll count |
+| `postMergePollIntervalMs` | `number?` | `10_000` | Poll interval in milliseconds |
 
-### Workflow 内ハードコード定数
+### Workflow hard-coded constants
 
-| 定数 | 場所 | 値 | 意味 |
+| Constant | Location | Value | Meaning |
 | --- | --- | --- | --- |
-| `DEFAULT_PERIODIC_SPAWN_CAP` | `workflows/_internal/spawn-budget.ts` | `16` | codex 呼び出し総数の上限（context+plan+impl+review 全部含む） |
-| `MAX_STEPS` | `periodic.ts` | `2` | planner が返したステップを切り詰める上限 |
-| `STEP_LOOP_CONFIG.maxIter` | `periodic.ts` | `2` | 各ステップの implement→review ループ上限 |
-| `STEP_LOOP_CONFIG.trivialLineThreshold` | `periodic.ts` | `30` | これ未満の (ins+del) は Pre-Parliament Gate でスキップ |
-| `STEP_LOOP_CONFIG.trivialFileThreshold` | `periodic.ts` | `3` | これ未満の files-changed は Pre-Parliament Gate でスキップ |
-| `STEP_LOOP_CONFIG.reviewDiffBytes` | `periodic.ts` | `8 * 1024` | reviewer に渡す diff の最大バイト数 |
-| `STEP_LOOP_CONFIG.reviewerConcerns` | `periodic.ts` | `['correctness', 'quality']` | Parliament の reviewer ロール |
-| `CI_POLL_INTERVAL_SECONDS` | `pr-lifecycle.ts` | `30` | `waitForCIActivity` の polling 間隔（heartbeat とは独立） |
-| `CI_MAX_WAIT_SECONDS` | `pr-lifecycle.ts` | `3600` | CI 待ちの上限（超えると `CITimeout`） |
-| `POST_MERGE_POLL_ATTEMPTS` | `pr-lifecycle.ts` | `6` | 既定の merge 観測 poll 回数 |
-| `POST_MERGE_POLL_INTERVAL_MS` | `pr-lifecycle.ts` | `10_000` | 既定の poll 間隔 |
+| `DEFAULT_PERIODIC_SPAWN_CAP` | `workflows/_internal/spawn-budget.ts` | `16` | Total codex call cap (context + plan + impl + review combined) |
+| `MAX_STEPS` | `periodic.ts` | `2` | Maximum steps taken from the planner output |
+| `STEP_LOOP_CONFIG.maxIter` | `periodic.ts` | `2` | implement → review loop iteration cap per step |
+| `STEP_LOOP_CONFIG.trivialLineThreshold` | `periodic.ts` | `30` | Diffs below this (ins+del) skip Parliament |
+| `STEP_LOOP_CONFIG.trivialFileThreshold` | `periodic.ts` | `3` | Diffs below this file count skip Parliament |
+| `STEP_LOOP_CONFIG.reviewDiffBytes` | `periodic.ts` | `8 * 1024` | Maximum diff bytes passed to reviewers |
+| `STEP_LOOP_CONFIG.reviewerConcerns` | `periodic.ts` | `['correctness', 'quality']` | Parliament reviewer roles |
+| `CI_POLL_INTERVAL_SECONDS` | `pr-lifecycle.ts` | `30` | `waitForCIActivity` polling interval |
+| `CI_MAX_WAIT_SECONDS` | `pr-lifecycle.ts` | `3600` | CI wait upper bound (exceeded → `CITimeout`) |
+| `POST_MERGE_POLL_ATTEMPTS` | `pr-lifecycle.ts` | `6` | Default merge-observation poll count |
+| `POST_MERGE_POLL_INTERVAL_MS` | `pr-lifecycle.ts` | `10_000` | Default poll interval |
 
 ---
 
 ## ApplicationFailure type catalog
 
-operator が Temporal Web UI で見ることになる `ApplicationFailure.type` を一覧化する。
-`Retryable?` 列は **Activity 側で投げた瞬間にリトライされるか** を示す。
-`No (nonRetryable)` は `ApplicationFailure.nonRetryable()` で投げているため
-proxy の RetryPolicy 設定とは無関係に即失敗。`No (workflow throw)` は
-workflow コードからの throw なので Workflow 自体が失敗終了する。
+`ApplicationFailure.type` values visible in the Temporal Web UI. "Retryable?" shows whether the error is retried at the Activity level. `nonRetryable` errors ignore the proxy's RetryPolicy and fail immediately. `workflow throw` errors terminate the Workflow itself.
 
-| Type | 投げる場所 | Retryable? | 意味と対処 |
+| Type | Thrown by | Retryable? | Meaning and resolution |
 | --- | --- | --- | --- |
-| `MissingCredentials` | `gh-env.ts` / `git-env.ts` / `run-codex.ts` | No (nonRetryable) | `GITHUB_TOKEN` 未設定 / `~/.codex/auth.json` 不在。Worker 環境を直す |
-| `InvalidGitRef` | `git-env.ts` | No (nonRetryable) | base branch が空文字。Schedule 入力 / workflow 引数を直す |
-| `InvalidGitHubOutput` | `gh-json.ts` | No (nonRetryable) | gh CLI の JSON が想定外。gh のバージョン更新 / API 仕様変更を疑う |
-| `PlannerOutputInvalid` | `refactor/_internal/parsers.ts` | No (nonRetryable) | planner が JSON を返さなかった。プロンプトかモデルの問題。periodic は `skipped: 'plan-failed'` で着地 |
-| `AdvisorOutputInvalid` | `advisor/advisor.ts` | No (nonRetryable, proxy 側で除外) | advisor が JSON を返さなかった。`reply: undefined` 扱いで通常分岐に落ちる |
-| `RateLimited` | `run-codex.ts` | **Yes** | codex CLI の stderr/stdout に rate-limit 文字列。proxy の `codexQuotaFriendlyRetry` で指数バックオフ |
-| `CodexInvocationError` | `run-codex.ts` | **Yes** | codex の非 0 終了。`RateLimited` 以外。リトライで救えなければ最終的に Workflow 失敗 |
-| `CITimeout` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | `CI_MAX_WAIT_SECONDS` 経過しても CI 未収束。GitHub 側を確認 |
-| `AdvisorAbort` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | iter ≥ 2 で advisor が `verdict: abort` を返した。意図的な早期停止 |
-| `NoFixDiff` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | codex が "fixed it" と言ったが diff が空。プロンプト誤解 / sandbox 問題を疑う |
-| `MaxIterationsExceeded` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | `maxFixIterations` まで使い切っても CI green に至らず |
+| `MissingCredentials` | `gh-env.ts` / `git-env.ts` / `run-codex.ts` | No (nonRetryable) | `GITHUB_TOKEN` missing or `auth.json` absent. Fix the Worker environment |
+| `InvalidGitRef` | `git-env.ts` | No (nonRetryable) | Base branch is empty. Fix the Schedule input |
+| `InvalidGitHubOutput` | `gh-json.ts` | No (nonRetryable) | Unexpected gh CLI JSON. Check gh version or API changes |
+| `PlannerOutputInvalid` | `refactor/_internal/parsers.ts` | No (nonRetryable) | Planner returned non-JSON. Likely a prompt or model issue. periodic lands on `skipped: 'plan-failed'` |
+| `AdvisorOutputInvalid` | `advisor/advisor.ts` | No (nonRetryable, excluded in proxy) | Advisor returned non-JSON. Treated as `reply: undefined`; normal branch continues |
+| `RateLimited` | `run-codex.ts` / `run-codex-app-server.ts` | **Yes** | codex rate-limited (429 / quota text detected). `codexQuotaFriendlyRetry` applies exponential backoff |
+| `CodexInvocationError` | `run-codex.ts` / `run-codex-app-server.ts` | **Yes** | Non-zero codex exit or RPC error, not rate-limited. Workflow fails if retries are exhausted |
+| `CITimeout` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | CI did not settle within `CI_MAX_WAIT_SECONDS`. Check GitHub Actions |
+| `AdvisorAbort` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | Advisor returned `verdict: abort` at iter ≥ 2. Intentional early stop |
+| `NoFixDiff` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | codex claimed a fix but diff is empty. Check prompt / sandbox |
+| `MaxIterationsExceeded` | `pr-lifecycle.ts` (workflow) | No (workflow throw) | `maxFixIterations` exhausted without reaching CI green |
 
-`nonRetryableErrorTypes` に登録されている `MissingCredentials` / `InvalidGitRef` /
-`PlannerOutputInvalid` / `AdvisorOutputInvalid` は `proxies.ts` の各 RetryPolicy
-で除外されているため、proxy 経由でも 1 回でフェイルする。
+`MissingCredentials`, `InvalidGitRef`, `PlannerOutputInvalid`, and `AdvisorOutputInvalid` are listed in `nonRetryableErrorTypes` in `proxies.ts`, so they fail on the first attempt even through proxy retry policies.
 
 ---
 
-## 既知の制約と将来検討事項
+## Known limitations and future work
 
-1. **workdir が Pod ローカル**: 親 Workflow の Activity が確保した `workdir` を子 Workflow が継続利用する設計のため、
-   両方が同一 Worker 上で実行される必要がある。スケール時は worker pool を分割するか
-   workdir を共有ストレージに置くなどの再設計が必要。
-2. **codex CLI の実フラグ**: `codex exec` の引数はバージョン依存。
-   CI でバージョン固定し、互換性ブレが起きたら `src/activities/_internal/run-codex.ts` で吸収する。
-3. **Replay テストが未整備**: `Worker.runReplayHistory` を使った履歴互換テストを追加すると、
-   `pr-lifecycle.ts` のような長寿命ワークフローを安全にバージョンアップできる。
-4. **Issue 駆動ルートの再追加**: 将来 `ai-ready` ラベル付き Issue を処理したくなったら、
-   `github/list-ai-ready-issues.ts` / `github/update-issue-status.ts` を追加し、
-   `issuePollerWorkflow` → `issueDrivenWorkflow` → `robustPRMergeWorkflow` の階層を組む。
-5. **別 LLM の再導入**: claude を戻したい場合は `claude/` クラスタを別途追加し、
-   `codex/` と並行する Activity Proxy として呼び分ければよい。
-   現状は codex 一本で十分なので簡略化している。
+1. **workdir is pod-local**: The parent Workflow provisions `workdir` and passes it to child Workflows, which assumes all of them run on the same Worker pod. When scaling, either pin Workflows to pods, move `workdir` to shared storage, or re-clone in each child.
+2. **codex CLI flags are version-sensitive**: Arguments are matched to the documented API at build time. Pin the version in CI; absorb breaking changes in `_internal/run-codex.ts` and `_internal/run-codex-app-server.ts`.
+3. **Replay tests not set up**: `tests/fixtures/replay/` is a placeholder. Adding `Worker.runReplayHistory` CI checks would make it safe to version long-lived Workflows like `pr-lifecycle.ts`.
+4. **Issue-driven route**: To handle `ai-ready`-labelled issues, add `github/list-ai-ready-issues.ts` / `github/update-issue-status.ts` and build `issuePollerWorkflow` → `issueDrivenWorkflow` → `robustPRMergeWorkflow`.
+5. **Alternative LLM**: To add Claude or another model, add a separate Activity cluster and a corresponding proxy. The current codex-only setup is intentional; the architecture does not preclude adding more.
+6. **`change-strategy` verdict is treated as `retry`**: The suggested action is recorded in the audit log but has no distinct runtime effect. A future branch could implement concrete actions (e.g. convert PR to draft, apply a different prompt strategy).

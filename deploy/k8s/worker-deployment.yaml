@@ -41,6 +41,12 @@ spec:
             - secretRef:
                 name: temporal-repo-steward-env
           volumeMounts:
+            # codex writes session files and logs to $HOME/.codex at runtime.
+            # Mounting a Secret directory-wide as readOnly causes "Read-only file
+            # system" errors.  Instead: writable emptyDir for the directory,
+            # then auth.json as a single read-only file inside it via subPath.
+            - name: codex-state
+              mountPath: /home/agent/.codex
             - name: codex-auth
               mountPath: /home/agent/.codex/auth.json
               subPath: auth.json
@@ -61,3 +67,6 @@ spec:
           secret:
             secretName: codex-auth
             defaultMode: 0600
+        - name: codex-state
+          emptyDir:
+            sizeLimit: 256Mi

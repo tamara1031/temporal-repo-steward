@@ -1,31 +1,29 @@
-# Deployment Example (Reference Only)
+# Deployment Example
 
-> 実運用の Deployment / Secret / NetworkPolicy はこのリポジトリの homelab 側で
-> 一括管理されます。ここに置く YAML はあくまでサンプルで、homelab 側の構成に
-> 取り込む際の参照用です。
+> The authoritative Deployment / Secret / NetworkPolicy for production are managed in the homelab repository.  
+> The manifests here are **reference examples** intended as a starting point.
 
-## 前提
+## Prerequisites
 
-- Worker はアウトバウンド通信のみ。Service / Ingress / HTTPRoute は不要です。
-- 必要な認証情報:
-  - `GITHUB_TOKEN` … GitHub PAT（環境変数）。必要権限は本ファイル末尾「GitHub PAT スコープ」を参照
-  - `~/.codex/auth.json` … codex CLI のブラウザログイン後に生成される認証ファイル
-    （ローカルで `codex login` を 1 度走らせて生成してから Secret 化）
+- Worker makes outbound connections only — no Service, Ingress, or HTTPRoute required.
+- Two secrets must be created before the Deployment starts:
+  - `GITHUB_TOKEN` — GitHub PAT (see [GitHub PAT scopes](#github-pat-scopes))
+  - `~/.codex/auth.json` — created by running `codex login` locally (browser flow)
 
-## 環境変数
+## Environment variables
 
-`repo-steward-config` ConfigMap 相当に渡したい値:
+Variables typically placed in a `repo-steward-config` ConfigMap:
 
-| Key | 既定値 | 用途 |
+| Key | Default | Purpose |
 | --- | --- | --- |
-| `TEMPORAL_ADDRESS` | `temporal-frontend.temporal.svc.cluster.local:7233` | Temporal Frontend |
-| `TEMPORAL_NAMESPACE` | `default` | 名前空間 |
-| `TEMPORAL_TASK_QUEUE` | `repo-steward` | Worker のタスクキュー |
-| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | `4` | アクティビティ並列度 |
-| `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | `20` | ワークフロータスク並列度 |
-| `TEMPORAL_TLS` | `false` | mTLS 利用時に `true` |
+| `TEMPORAL_ADDRESS` | `temporal-frontend.temporal.svc.cluster.local:7233` | Temporal Frontend gRPC |
+| `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
+| `TEMPORAL_TASK_QUEUE` | `repo-steward` | Worker task queue |
+| `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | `4` | Activity parallelism (= codex concurrency) |
+| `TEMPORAL_MAX_CONCURRENT_WORKFLOWS` | `20` | Workflow task parallelism |
+| `TEMPORAL_TLS` | `false` | Set `true` for mTLS |
 
-## サンプル: Deployment + Secret マウント
+## Deployment + Secret mounts
 
 ```yaml
 apiVersion: apps/v1
@@ -34,10 +32,10 @@ metadata:
   name: repo-steward-worker
   namespace: repo-steward
 spec:
-  # workdir はローカル emptyDir に置くため、PR ライフサイクル子ワークフローを
-  # またいで同一 Pod 上で完結する必要があります。スケールするなら
-  # 「issue/refactor 単位で完結する別 Worker プール」へ分割するか、
-  # workdir を共有ボリュームに置く設計に変更してください。
+  # workdir lives in the container filesystem (os.tmpdir()).
+  # Parent and child Workflows reuse the same workdir, so both must run on
+  # the same pod.  To scale horizontally, either pin Workflows to a pod or
+  # move workdir to a shared volume.
   replicas: 1
   selector:
     matchLabels:
@@ -49,10 +47,6 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        # 標準的な non-root pod。Pod 境界そのものを隔離単位として扱うので、
-        # codex CLI 側は --sandbox danger-full-access で動かしており、bwrap
-        # は走りません。ノードの seccomp / AppArmor / userns 関連の sysctl
-        # をいじる必要はありません。
         runAsNonRoot: true
         runAsUser: 1001
         fsGroup: 1001
@@ -71,19 +65,16 @@ spec:
             - name: HOME
               value: /home/agent
           volumeMounts:
-            # codex は $CODEX_HOME (= ~/.codex) 配下に session rollout / history.jsonl /
-            # log を書き出すため、ディレクトリ全体を readOnly Secret で覆うと
-            # `Error: Read-only file system (os error 30)` で exit 1 する。
-            # auth.json だけを subPath でファイル単位マウントし、ディレクトリ自体は
-            # 書き込み可能な emptyDir にする。
+            # codex writes session files and logs to $HOME/.codex at runtime.
+            # Mounting the Secret directory-wide as readOnly causes "Read-only
+            # file system" errors.  Solution: writable emptyDir for the directory,
+            # then auth.json as a single read-only file inside it via subPath.
             - name: codex-state
               mountPath: /home/agent/.codex
             - name: codex-auth
               mountPath: /home/agent/.codex/auth.json
               subPath: auth.json
               readOnly: true
-            - name: workspaces
-              mountPath: /workspaces
           resources:
             requests: { cpu: "500m", memory: "1Gi" }
             limits:   { cpu: "2",    memory: "4Gi" }
@@ -98,14 +89,11 @@ spec:
         - name: codex-state
           emptyDir:
             sizeLimit: 256Mi
-        - name: workspaces
-          emptyDir:
-            sizeLimit: 10Gi
 ```
 
-## サンプル: Secret 投入コマンド
+## Creating secrets
 
-事前にローカルで `codex login`（ブラウザフロー）を実行し、`~/.codex/auth.json` を生成しておきます。
+Run `codex login` locally (browser flow) first to generate `~/.codex/auth.json`.
 
 ```bash
 kubectl -n repo-steward create secret generic github-token \
@@ -115,10 +103,19 @@ kubectl -n repo-steward create secret generic codex-auth \
   --from-file=auth.json="$HOME/.codex/auth.json"
 ```
 
-> auth.json はリフレッシュトークンを含みます。ローテーションは
-> `codex login` をやり直して Secret を再投入する形になります。
+> `auth.json` contains a refresh token. To rotate it, re-run `codex login` locally and recreate the secret.
 
-## サンプル: NetworkPolicy（アウトバウンド限定）
+To avoid leaking the PAT into shell history, use stdin:
+
+```bash
+read -rs GITHUB_TOKEN
+printf '%s' "$GITHUB_TOKEN" \
+  | kubectl -n repo-steward create secret generic github-token \
+      --dry-run=client -o yaml --from-file=token=/dev/stdin \
+  | kubectl apply -f -
+```
+
+## NetworkPolicy (egress-only)
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -147,42 +144,31 @@ spec:
         - { protocol: TCP, port: 443 }
 ```
 
-## GitHub PAT スコープ
+## GitHub PAT scopes
 
-### Fine-grained PAT（推奨。対象 repo のみにスコープ）
+### Fine-grained PAT (recommended — scoped to the target repo)
 
-| 権限 | レベル | 用途 |
+| Permission | Level | Purpose |
 | --- | --- | --- |
-| Contents | Read & Write | clone / branch 作成 / push |
-| Pull requests | Read & Write | PR 作成 / マージ |
-| Actions | Read | `gh run view --log-failed` |
-| Workflows | Read & Write | `.github/workflows/*.yml` を変更する PR を作る場合 |
-| Metadata | Read | 自動付与 |
+| Contents | Read & Write | clone / branch / push |
+| Pull requests | Read & Write | create PR / merge |
+| Actions | Read | `gh run view --log-failed` (CI failure logs) |
+| Workflows | Read & Write | Required when the refactor modifies `.github/workflows/*.yml` |
+| Metadata | Read | Granted automatically |
 
-### Classic PAT（簡易。owner 全体に効く）
+### Classic PAT (simpler — applies to the entire owner)
 
-- `repo` — Contents / PR / Actions / Issues すべて
-- `workflow` — `.github/workflows` 配下の編集
+- `repo` — Contents / PRs / Actions / Issues
+- `workflow` — edit files under `.github/workflows`
 
-### Secret 投入時の注意
+### Token expiry
 
-- Secret は kubectl `create secret generic` で投入する際、PAT が shell 履歴に残る。
-  `kubectl create -f -` で stdin 経由にすると履歴を汚さない:
-  ```bash
-  read -s GITHUB_TOKEN  # 入力エコーされない
-  printf '%s' "$GITHUB_TOKEN" \
-    | kubectl -n repo-steward create secret generic github-token \
-        --dry-run=client -o yaml --from-file=token=/dev/stdin \
-    | kubectl apply -f -
-  ```
-- 期限切れ時の挙動は `gh` / `git` 側の 401 で失敗 → Activity リトライ → Workflow 失敗。
-  Temporal Web UI で `401 Unauthorized` を見たら PAT 期限切れを疑うこと。
+An expired token causes `gh`/`git` 401 errors that exhaust Activity retries before the Workflow fails.  
+Look for `401 Unauthorized` in the Temporal Web UI failure history when diagnosing auth problems.
 
-## Schedule の登録
+## Schedule setup
 
-`scripts/schedule-setup.sh` を Worker Pod もしくは管理者端末で実行してください。
-`temporal` CLI が解決できる Cluster へ向けて
-`periodicRefactorWorkflow` の Schedule を upsert します。
+Run `scripts/schedule-setup.sh` from a Worker pod or an admin machine that can reach the Temporal cluster. It upserts a `periodicRefactorWorkflow` Schedule.
 
 ```bash
 TEMPORAL_ADDRESS=temporal-frontend.temporal.svc.cluster.local:7233 \
