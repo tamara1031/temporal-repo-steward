@@ -19,6 +19,7 @@ import { log } from '@temporalio/workflow';
 import { planCodex } from '../proxies';
 import type { ContextArtifact, DesignPhaseRecord, DesignRound, PlanOutput, PlanReviewConcern, PlanStep } from '../../activities/refactor';
 import type { SpawnCounter } from './spawn-budget';
+import { collectFeedback } from './feedback';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Structural equality helpers for PlanOutput
@@ -151,13 +152,7 @@ export async function runDesignPhase(input: DesignPhaseLoopInput): Promise<Desig
       break;
     }
 
-    const feedback: string[] = [];
-    for (let i = 0; i < reviews.length; i++) {
-      const r = reviews[i];
-      const tag = reviewerConcerns[i];
-      for (const issue of r.blocking_issues) feedback.push(`[${tag}] ${issue}`);
-      for (const sugg of r.suggestions.slice(0, 2)) feedback.push(`[${tag}] ${sugg}`);
-    }
+    const feedback = collectFeedback(reviews, reviewerConcerns);
 
     if (!spawnCounter.canConsume(1)) {
       log.warn('design spawn budget too low for plan refiner; accepting current plan', { iter });

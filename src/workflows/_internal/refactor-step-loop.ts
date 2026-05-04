@@ -35,6 +35,7 @@ import type {
   ReviewConcern,
 } from '../../activities/refactor';
 import { arraysEqual, diffPorcelain } from './porcelain';
+import { collectFeedback } from './feedback';
 import { AdvisorBudget, consultAdvisor, type AdvisorAuditEntry } from './advisor';
 import type { StepRecord } from './refactor-report';
 import type { SpawnCounter } from './spawn-budget';
@@ -302,20 +303,12 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
           step: step.title,
           concern: blockerConcern,
         });
-        for (const issue of reviews[blocker].blocking_issues) {
-          accumulatedFeedback.push(`[${blockerConcern}] ${issue}`);
-        }
-        for (const sugg of reviews[blocker].suggestions.slice(0, 2)) {
-          accumulatedFeedback.push(`[${blockerConcern}] ${sugg}`);
-        }
-        // Other reviewers' feedback still applies.
-        for (let i = 0; i < reviews.length; i++) {
-          if (i === blocker) continue;
-          const r = reviews[i];
-          const tag = reviewerConcerns[i];
-          for (const issue of r.blocking_issues) accumulatedFeedback.push(`[${tag}] ${issue}`);
-          for (const sugg of r.suggestions.slice(0, 2)) accumulatedFeedback.push(`[${tag}] ${sugg}`);
-        }
+        // Collect the blocking reviewer's feedback first, then every other
+        // reviewer's (skipIndex omits the blocker in the second call).
+        accumulatedFeedback.push(
+          ...collectFeedback([reviews[blocker]], [blockerConcern]),
+          ...collectFeedback(reviews, reviewerConcerns, blocker),
+        );
         continue; // re-enter iter loop with the appended feedback
       }
 
@@ -340,12 +333,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     }
 
     // needs_revision → loop with feedback
-    for (let i = 0; i < reviews.length; i++) {
-      const r = reviews[i];
-      const tag = reviewerConcerns[i];
-      for (const issue of r.blocking_issues) accumulatedFeedback.push(`[${tag}] ${issue}`);
-      for (const sugg of r.suggestions.slice(0, 2)) accumulatedFeedback.push(`[${tag}] ${sugg}`);
-    }
+    accumulatedFeedback.push(...collectFeedback(reviews, reviewerConcerns));
   } // end iterLoop
 
   // Fell through maxIter without convergence — roll back this step's changes.
