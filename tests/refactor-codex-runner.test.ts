@@ -355,7 +355,7 @@ describe('extractContextArtifactActivity', () => {
     expect(result.generatedAt).toBe('2026-05-04T00:00:00.000Z');
     expect(runCodexExecMock).toHaveBeenCalledWith({
       workdir: '/tmp/workdir',
-      prompt: PROMPTS.context(),
+      prompt: PROMPTS.context,
       timeoutMs: 5 * 60 * 1000,
     });
   });
@@ -374,7 +374,7 @@ describe('extractContextArtifactActivity', () => {
 
     expect(runCodexExecMock).toHaveBeenCalledWith({
       workdir: '/tmp/workdir',
-      prompt: PROMPTS.context(),
+      prompt: PROMPTS.context,
       timeoutMs: 44_444,
     });
   });

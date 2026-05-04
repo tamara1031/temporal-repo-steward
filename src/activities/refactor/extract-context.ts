@@ -20,7 +20,7 @@ const CONTEXT_TIMEOUT_MS = 5 * 60 * 1000;
 export async function extractContextArtifactActivity(
   input: ExtractContextInput,
 ): Promise<ContextArtifact> {
-  const prompt = PROMPTS.context();
+  const prompt = PROMPTS.context;
   return runRefactorActivity({
     workdir: input.workdir,
     prompt,

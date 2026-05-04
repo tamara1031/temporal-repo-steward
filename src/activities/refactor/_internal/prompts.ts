@@ -412,7 +412,7 @@ ${feedbackBlock}`;
 };
 
 export const PROMPTS = {
-  context: (): string => CONTEXT_PROMPT,
+  context: CONTEXT_PROMPT,
   plan: PLAN_PROMPT,
   implement: IMPLEMENT_PROMPT,
   review: REVIEW_PROMPT,
