@@ -116,6 +116,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
   };
   const accumulatedFeedback: string[] = [];
   let lastDiffText: string | undefined;
+  let lastDiffTruncated = false;
   let lastPorcelainEntries: string[] | undefined;
 
   // Commit any accumulated prior-step changes as a checkpoint so that a full
@@ -178,8 +179,18 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     // - diff text captures content changes to tracked files
     // - porcelain entries capture new untracked files (git diff omits them)
     // Either signal differing means the implementer made real progress.
+    //
+    // Truncation guard: when either snapshot was cut at maxBytes, the stored
+    // text is a prefix, not the full diff. Two distinct full diffs can share
+    // an identical prefix, so comparing truncated snapshots can produce a
+    // false "no progress" result and prematurely roll back a productive step.
+    // We skip the check entirely when either side was truncated; the
+    // maxIter cap still bounds the loop in the worst case.
+    const currentTruncated = postImplDiff.truncated;
     if (
       iter > 0 &&
+      !lastDiffTruncated &&
+      !currentTruncated &&
       lastDiffText !== undefined &&
       lastPorcelainEntries !== undefined &&
       lastDiffText === postImplDiff.text &&
@@ -193,6 +204,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       return { kind: 'completed', record };
     }
     lastDiffText = postImplDiff.text;
+    lastDiffTruncated = currentTruncated;
     lastPorcelainEntries = postImplStatus.entries;
 
     // 3. Pre-Parliament Gate (trivial diff → skip Parliament)
