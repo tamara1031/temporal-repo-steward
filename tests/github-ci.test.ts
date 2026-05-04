@@ -10,6 +10,10 @@ import {
   type RollupCheck,
   type RollupSnapshot,
 } from '../src/activities/github/_internal/ci-rollup';
+import {
+  pollCIStatus,
+  type PRWithChecks,
+} from '../src/activities/github/_internal/wait-ci-poll';
 
 describe('github CI helpers', () => {
   it('parses missing statusCheckRollup as empty', () => {
@@ -327,6 +331,114 @@ describe('evaluateStabilization', () => {
   });
 });
 
+describe('pollCIStatus', () => {
+  it('waits for a successful rollup to stabilize before returning success', async () => {
+    const poll = makeCIPoll([
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'lint', conclusion: 'SUCCESS' }]) },
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'lint', conclusion: 'SUCCESS' }]) },
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'lint', conclusion: 'SUCCESS' }]) },
+    ]);
+
+    await expect(
+      pollCIStatus(
+        {
+          prNumber: 42,
+          pollIntervalSeconds: 30,
+          maxWaitSeconds: 120,
+          minSuccessStabilizationSeconds: 60,
+        },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ status: 'success', failedRunIds: [], failedJobNames: [] });
+
+    expect(poll.observed()).toBe(3);
+    expect(poll.sleeps).toEqual([30_000, 30_000]);
+  });
+
+  it('returns failure immediately without stabilization', async () => {
+    const poll = makeCIPoll([
+      {
+        state: 'OPEN',
+        checksJson: rollupJSON([
+          {
+            name: 'test',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.com/example/repo/actions/runs/123/job/456',
+          },
+        ]),
+      },
+    ]);
+
+    await expect(
+      pollCIStatus(
+        {
+          prNumber: 42,
+          pollIntervalSeconds: 30,
+          maxWaitSeconds: 120,
+          minSuccessStabilizationSeconds: 60,
+        },
+        poll.deps,
+      ),
+    ).resolves.toEqual({
+      status: 'failure',
+      failedRunIds: ['123'],
+      failedJobNames: ['test'],
+    });
+
+    expect(poll.observed()).toBe(1);
+    expect(poll.sleeps).toEqual([]);
+  });
+
+  it('returns timeout when the rollup stays pending through the wait budget', async () => {
+    const poll = makeCIPoll([
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+    ]);
+
+    await expect(
+      pollCIStatus(
+        {
+          prNumber: 42,
+          pollIntervalSeconds: 30,
+          maxWaitSeconds: 60,
+          minSuccessStabilizationSeconds: 60,
+        },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ status: 'timeout', failedRunIds: [], failedJobNames: [] });
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([30_000, 30_000]);
+  });
+
+  it.each([
+    ['CLOSED', 'closed'],
+    ['MERGED', 'merged'],
+  ] satisfies Array<[PRWithChecks['state'], Awaited<ReturnType<typeof pollCIStatus>>['status']]>)(
+    'returns %s as %s before inspecting checks',
+    async (state, status) => {
+      const poll = makeCIPoll([
+        { state, checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+      ]);
+
+      await expect(
+        pollCIStatus(
+          {
+            prNumber: 42,
+            pollIntervalSeconds: 30,
+            maxWaitSeconds: 120,
+            minSuccessStabilizationSeconds: 60,
+          },
+          poll.deps,
+        ),
+      ).resolves.toEqual({ status, failedRunIds: [], failedJobNames: [] });
+
+      expect(poll.observed()).toBe(1);
+      expect(poll.sleeps).toEqual([]);
+    },
+  );
+});
+
 function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): void {
   try {
     fn();
@@ -339,4 +451,34 @@ function expectInvalidGitHubOutput(fn: () => unknown, messageParts: string[]): v
     return;
   }
   throw new Error(`Expected ${ERR_INVALID_GH_OUTPUT} ApplicationFailure`);
+}
+
+function rollupJSON(checks: RollupCheck[]): string {
+  return JSON.stringify({ statusCheckRollup: checks });
+}
+
+function makeCIPoll(observations: PRWithChecks[]): {
+  deps: Parameters<typeof pollCIStatus>[1];
+  sleeps: number[];
+  observed: () => number;
+} {
+  const sleeps: number[] = [];
+  let observed = 0;
+  let now = 0;
+  return {
+    deps: {
+      observe: async () => {
+        const value = observations[Math.min(observed, observations.length - 1)];
+        observed += 1;
+        return value;
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+      now: () => now,
+    },
+    sleeps,
+    observed: () => observed,
+  };
 }
