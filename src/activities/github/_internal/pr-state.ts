@@ -27,18 +27,22 @@ export function parsePRStateJSON(stdout: string): PRStateObservation {
   if (!isRecord(data)) {
     throw invalidGhOutput('gh pr view --json state,mergedAt output must be a JSON object');
   }
-  const stateRaw = data.state;
-  if (stateRaw !== 'OPEN' && stateRaw !== 'CLOSED' && stateRaw !== 'MERGED') {
-    throw invalidGhOutput(
-      `gh pr view returned unexpected state ${JSON.stringify(stateRaw)}; expected OPEN|CLOSED|MERGED`,
-    );
-  }
+  const state = parsePRLifecycleState(data.state);
   const mergedAtRaw = data.mergedAt;
   if (mergedAtRaw !== undefined && mergedAtRaw !== null && typeof mergedAtRaw !== 'string') {
     throw invalidGhOutput('gh pr view returned non-string mergedAt');
   }
   return {
-    state: stateRaw,
+    state,
     ...(typeof mergedAtRaw === 'string' && mergedAtRaw.length > 0 ? { mergedAt: mergedAtRaw } : {}),
   };
+}
+
+export function parsePRLifecycleState(stateRaw: unknown): PRLifecycleState {
+  if (stateRaw !== 'OPEN' && stateRaw !== 'CLOSED' && stateRaw !== 'MERGED') {
+    throw invalidGhOutput(
+      `gh pr view returned unexpected state ${JSON.stringify(stateRaw)}; expected OPEN|CLOSED|MERGED`,
+    );
+  }
+  return stateRaw;
 }

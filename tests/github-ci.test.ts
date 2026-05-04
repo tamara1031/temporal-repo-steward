@@ -14,6 +14,7 @@ import {
   pollCIStatus,
   type PRWithChecks,
 } from '../src/activities/github/_internal/wait-ci-poll';
+import { parsePRWithChecksJSON } from '../src/activities/github/wait-for-ci';
 
 describe('github CI helpers', () => {
   it('parses missing statusCheckRollup as empty', () => {
@@ -43,6 +44,23 @@ describe('github CI helpers', () => {
     expectInvalidGitHubOutput(
       () => parseStatusCheckRollupJSON('{"statusCheckRollup":[{"conclusion":"SUCCESS"}]}'),
       ['statusCheckRollup[0] is missing string field "name"'],
+    );
+  });
+
+  it.each(['CLOSED', 'MERGED'] satisfies PRWithChecks['state'][])(
+    'parses PR state %s from wait-for-ci JSON',
+    (state) => {
+      expect(parsePRWithChecksJSON(JSON.stringify({ state, statusCheckRollup: [] }))).toEqual({
+        state,
+        checksJson: '{"statusCheckRollup":[]}',
+      });
+    },
+  );
+
+  it('rejects invalid PR state values in wait-for-ci JSON', () => {
+    expectInvalidGitHubOutput(
+      () => parsePRWithChecksJSON('{"state":"DRAFT","statusCheckRollup":[]}'),
+      ['gh pr view returned unexpected state', 'expected OPEN|CLOSED|MERGED'],
     );
   });
 

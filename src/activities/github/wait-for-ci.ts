@@ -6,6 +6,7 @@ import {
 } from './_internal/wait-ci-poll';
 import { ghEnv } from './_internal/gh-env';
 import { invalidGhOutput, isRecord, parseGhJSON } from './_internal/gh-json';
+import { parsePRLifecycleState } from './_internal/pr-state';
 import { withGitHubWaitHeartbeat } from './_internal/wait-heartbeat';
 
 export interface WaitForCIInput {
@@ -77,7 +78,7 @@ export async function waitForCIActivity(input: WaitForCIInput): Promise<CIResult
             ],
             { env },
           );
-          return parsePRWithChecks(view.stdout);
+          return parsePRWithChecksJSON(view.stdout);
         },
         sleep,
         now: Date.now,
@@ -103,19 +104,13 @@ export async function waitForCIActivity(input: WaitForCIInput): Promise<CIResult
  * raw JSON forward into `parseStatusCheckRollupJSON` rather than decoding it
  * twice — keeps the existing helper as the single source of rollup truth.
  */
-function parsePRWithChecks(stdout: string): PRWithChecks {
+export function parsePRWithChecksJSON(stdout: string): PRWithChecks {
   const data = parseGhJSON(stdout, 'gh pr view --json statusCheckRollup,state');
   if (!isRecord(data)) {
     throw invalidGhOutput('gh pr view --json statusCheckRollup,state output must be a JSON object');
   }
-  const stateRaw = data.state;
-  if (stateRaw !== 'OPEN' && stateRaw !== 'CLOSED' && stateRaw !== 'MERGED') {
-    throw invalidGhOutput(
-      `gh pr view returned unexpected state ${JSON.stringify(stateRaw)}; expected OPEN|CLOSED|MERGED`,
-    );
-  }
   return {
-    state: stateRaw,
+    state: parsePRLifecycleState(data.state),
     checksJson: JSON.stringify({ statusCheckRollup: data.statusCheckRollup ?? [] }),
   };
 }
