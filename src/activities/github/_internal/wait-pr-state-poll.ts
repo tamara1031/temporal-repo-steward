@@ -1,5 +1,5 @@
 import type { ObservePRStateOutput, PRLifecycleState } from '../observe-pr-state';
-import { nextPollSleepMs } from './polling-budget';
+import { nextPollSleepMs, normalizePollIntervalMs } from './polling-budget';
 
 export interface WaitForPRStatePollOptions {
   prNumber: number;
@@ -26,7 +26,10 @@ export async function pollPRState(
   input: WaitForPRStatePollOptions,
   deps: WaitForPRStatePollDeps,
 ): Promise<WaitForPRStateOutput> {
-  const interval = input.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const interval = normalizePollIntervalMs(
+    input.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    DEFAULT_POLL_INTERVAL_MS,
+  );
   const deadline = deps.now() + (input.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
   const targetStates = new Set<PRLifecycleState>(input.targetStates ?? ['CLOSED', 'MERGED']);
   let lastObserved: ObservePRStateOutput | undefined;

@@ -1,3 +1,10 @@
+export function normalizePollIntervalMs(intervalMs: number, defaultIntervalMs: number): number {
+  if (Number.isFinite(intervalMs) && intervalMs > 0) {
+    return intervalMs;
+  }
+  return Number.isFinite(defaultIntervalMs) && defaultIntervalMs > 0 ? defaultIntervalMs : 1;
+}
+
 export function nextPollSleepMs(
   deadlineMs: number,
   nowMs: number,

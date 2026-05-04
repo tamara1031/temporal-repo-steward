@@ -5,7 +5,7 @@ import {
   type CompletedCIDecision,
   type RollupSnapshot,
 } from './ci-rollup';
-import { nextPollSleepMs } from './polling-budget';
+import { nextPollSleepMs, normalizePollIntervalMs } from './polling-budget';
 
 export interface CIResult {
   status: 'success' | 'failure' | 'timeout' | 'closed' | 'merged';
@@ -36,11 +36,16 @@ export interface WaitForCIPollDeps {
   onNoChecksSettled?: (stabilizationSeconds: number) => void;
 }
 
+const DEFAULT_CI_POLL_INTERVAL_MS = 30 * 1000;
+
 export async function pollCIStatus(
   input: WaitForCIPollOptions,
   deps: WaitForCIPollDeps,
 ): Promise<CIResult> {
-  const interval = (input.pollIntervalSeconds ?? 30) * 1000;
+  const interval = normalizePollIntervalMs(
+    (input.pollIntervalSeconds ?? DEFAULT_CI_POLL_INTERVAL_MS / 1000) * 1000,
+    DEFAULT_CI_POLL_INTERVAL_MS,
+  );
   const minStabilizationMs = (input.minSuccessStabilizationSeconds ?? 60) * 1000;
   const deadline = deps.now() + (input.maxWaitSeconds ?? 60 * 60) * 1000;
   let stabilization: RollupSnapshot | undefined;

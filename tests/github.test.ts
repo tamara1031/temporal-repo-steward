@@ -197,6 +197,20 @@ describe('pollPRState', () => {
     expect(poll.sleeps).toEqual([10, 5]);
   });
 
+  it.each([0, -10])('normalizes %s ms poll intervals before sleeping', async (pollIntervalMs) => {
+    const poll = makePRStatePoll(['OPEN']);
+
+    await expect(
+      pollPRState(
+        { prNumber: 42, targetStates: ['MERGED'], pollIntervalMs, maxWaitMs: 2 },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ state: 'OPEN', timedOut: true });
+
+    expect(poll.sleeps).toEqual([2]);
+    expect(poll.sleeps.every((ms) => ms > 0)).toBe(true);
+  });
+
   it('falls back to OPEN when timeout occurs before the first observation', async () => {
     const poll = makePRStatePoll(['MERGED'], 1);
 
