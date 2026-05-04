@@ -211,7 +211,7 @@ export async function periodicRefactorWorkflow(
         const stepPush = await heavy.commitAndPushActivity({
           workdir,
           branch,
-          message: `wip(refactor): step ${stepIndex + 1}/${plannedSteps.length}`,
+          message: `refactor(auto): ${step.title}`,
         });
         if (stepPush.pushed) hasChanges = true;
       }
@@ -257,7 +257,7 @@ export async function periodicRefactorWorkflow(
     await heavy.commitAndPushActivity({
       workdir,
       branch,
-      message: `refactor(auto): ${branch}`,
+      message: `refactor(auto): ${plan.theme}`,
     });
 
     const prResult = await executeChild(robustPRMergeWorkflow, {
