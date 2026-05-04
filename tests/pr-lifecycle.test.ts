@@ -64,6 +64,7 @@ describe('robustPRMergeWorkflow', () => {
       'pushBranchActivity', // initial setUpstream push
       'createPRActivity',
       'waitForCIActivity',
+      'ensureWorkdirActivity', // workdir health check after CI wait
       'checkConflictActivity',
       'observePRStateActivity', // pre-merge state check
       'mergePRActivity',

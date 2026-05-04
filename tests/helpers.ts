@@ -42,6 +42,9 @@ export function makeMockActivities(
       branch: 'agent/refactor/test',
       baseSha: 'deadbeef',
     })),
+    ensureWorkdirActivity: record('ensureWorkdirActivity', async (input: { workdir: string }) => ({
+      workdir: input.workdir,
+    })),
     commitAllActivity: record('commitAllActivity', async () => ({
       committed: true,
       sha: 'cafebabe',

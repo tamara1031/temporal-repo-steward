@@ -1,5 +1,7 @@
+import * as fs from 'fs/promises';
 import { spawn } from 'child_process';
-import { Context, CancelledFailure } from '@temporalio/activity';
+import { Context, CancelledFailure, ApplicationFailure } from '@temporalio/activity';
+import { ERR_WORKDIR_MISSING } from '../../errors';
 
 export interface ExecOptions {
   cwd?: string;
@@ -57,6 +59,17 @@ export async function execCommand(
   args: readonly string[],
   options: ExecOptions = {},
 ): Promise<ExecResult> {
+  if (options.cwd) {
+    try {
+      await fs.stat(options.cwd);
+    } catch {
+      throw ApplicationFailure.nonRetryable(
+        `Workdir missing: ${options.cwd}`,
+        ERR_WORKDIR_MISSING,
+      );
+    }
+  }
+
   const hooks = getActivityHooks();
   const maxBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;

@@ -97,15 +97,19 @@ export async function robustPRMergeWorkflow(
   const advisorAudits: AdvisorAuditEntry[] = [];
   const info = workflowInfo();
 
+  // Use a mutable local so recovery (ensureWorkdirActivity) can update the
+  // path when the pod is replaced between activities.
+  let workdir = input.workdir;
+
   await heavy.pushBranchActivity({
-    workdir: input.workdir,
+    workdir,
     branch: input.branch,
     setUpstream: true,
   });
 
   const pr: PRInfo = await cheap.createPRActivity({
     repoFullName: input.repoFullName,
-    workdir: input.workdir,
+    workdir,
     branch: input.branch,
     baseBranch: input.baseBranch,
     title: input.prTitle,
@@ -135,12 +139,22 @@ export async function robustPRMergeWorkflow(
     const externalExit = handleExternalExit(ci, iter, finalize);
     if (externalExit) return externalExit;
 
+    // waitForCIActivity can run for up to 70 minutes; the pod may have been
+    // replaced in that window. Verify the workspace is still present and
+    // re-clone if necessary before any git activity that needs it.
+    ({ workdir } = await heavy.ensureWorkdirActivity({
+      workdir,
+      repoFullName: input.repoFullName,
+      branch: input.branch,
+    }));
+
     if (ci.status === 'failure') {
       iter += 1;
       const advice = await maybeConsultBeforeSelfHeal({
         iter,
         ci,
         input,
+        workdir,
         advisorBudget,
       });
       if (advice.audit) advisorAudits.push(advice.audit);
@@ -151,12 +165,12 @@ export async function robustPRMergeWorkflow(
         });
       }
 
-      await runCISelfHeal({ iter, ci, input, advisorBudget, audits: advisorAudits });
+      await runCISelfHeal({ iter, ci, input, workdir, advisorBudget, audits: advisorAudits });
       continue;
     }
 
     const conflict = await cheap.checkConflictActivity({
-      workdir: input.workdir,
+      workdir,
       baseBranch: input.baseBranch,
     });
 
@@ -166,6 +180,7 @@ export async function robustPRMergeWorkflow(
         iter,
         conflict,
         input,
+        workdir,
         advisorBudget,
         audits: advisorAudits,
       });
@@ -268,6 +283,8 @@ interface SelfHealContext {
   /** Always called with `ci.status === 'failure'` — typed as the full union to keep call sites simple. */
   ci: CIResult;
   input: RobustPRMergeInput;
+  /** Current workdir — may differ from input.workdir after pod-replacement recovery. */
+  workdir: string;
   advisorBudget: AdvisorBudget;
   /** Accumulated audit trail; helpers append entries on consult. */
   audits?: AdvisorAuditEntry[];
@@ -293,7 +310,7 @@ async function maybeConsultBeforeSelfHeal(
   ].join('\n');
 
   const { reply, audit } = await consultAdvisor(ctx.advisorBudget, 'ci-self-heal', {
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     situation: `CI is red on PR for branch ${ctx.input.branch}; deciding whether to attempt self-heal again.`,
     summary,
     options: [
@@ -316,7 +333,7 @@ async function runCISelfHeal(ctx: SelfHealContext): Promise<void> {
     failedRunIds: ctx.ci.failedRunIds,
   });
   const fix = await heavyCodex.codexActivity({
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     systemPrompt:
       'You are an autonomous fix-it engineer. Identify the failing test/build from ' +
       'the CI logs and apply MINIMAL changes to make CI pass. ' +
@@ -327,6 +344,7 @@ async function runCISelfHeal(ctx: SelfHealContext): Promise<void> {
   await commitAndPushOrEscalate({
     iter: ctx.iter,
     input: ctx.input,
+    workdir: ctx.workdir,
     advisorBudget: ctx.advisorBudget,
     audits: ctx.audits,
     commitMessage: `fix(ci): self-heal attempt ${ctx.iter}`,
@@ -338,6 +356,8 @@ interface ConflictResolveContext {
   iter: number;
   conflict: CheckConflictOutput;
   input: RobustPRMergeInput;
+  /** Current workdir — may differ from input.workdir after pod-replacement recovery. */
+  workdir: string;
   advisorBudget: AdvisorBudget;
   audits?: AdvisorAuditEntry[];
 }
@@ -348,7 +368,7 @@ async function runConflictResolve(ctx: ConflictResolveContext): Promise<void> {
     files: ctx.conflict.conflictedFiles,
   });
   const resolve = await heavyCodex.codexActivity({
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     systemPrompt:
       'You resolve git merge conflicts. Preserve intent from both sides whenever possible. ' +
       'Leave NO conflict markers in the resulting files.',
@@ -361,6 +381,7 @@ async function runConflictResolve(ctx: ConflictResolveContext): Promise<void> {
   await commitAndPushOrEscalate({
     iter: ctx.iter,
     input: ctx.input,
+    workdir: ctx.workdir,
     advisorBudget: ctx.advisorBudget,
     audits: ctx.audits,
     commitMessage: `chore(merge): resolve conflicts attempt ${ctx.iter}`,
@@ -371,6 +392,8 @@ async function runConflictResolve(ctx: ConflictResolveContext): Promise<void> {
 interface CommitAndPushContext {
   iter: number;
   input: RobustPRMergeInput;
+  /** Current workdir — may differ from input.workdir after pod-replacement recovery. */
+  workdir: string;
   advisorBudget: AdvisorBudget;
   audits?: AdvisorAuditEntry[];
   commitMessage: string;
@@ -386,7 +409,7 @@ interface CommitAndPushContext {
  */
 async function commitAndPushOrEscalate(ctx: CommitAndPushContext): Promise<void> {
   const commit = await heavy.commitAllActivity({
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     message: ctx.commitMessage,
   });
 
@@ -396,7 +419,7 @@ async function commitAndPushOrEscalate(ctx: CommitAndPushContext): Promise<void>
   }
 
   await heavy.pushBranchActivity({
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     branch: ctx.input.branch,
   });
 }
@@ -406,7 +429,7 @@ async function escalateNoDiff(ctx: CommitAndPushContext): Promise<never> {
   // but does not change the throw, because by this point no fix exists to
   // push regardless of what the advisor recommends.
   const { audit } = await consultAdvisor(ctx.advisorBudget, 'no-diff', {
-    workdir: ctx.input.workdir,
+    workdir: ctx.workdir,
     situation: 'codex reported success but produced no diff during self-heal',
     summary: `Iter ${ctx.iter}. Codex final message (truncated):\n${ctx.codexMessage.slice(0, 1024)}`,
     options: [

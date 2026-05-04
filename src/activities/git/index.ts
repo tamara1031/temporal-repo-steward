@@ -6,6 +6,9 @@
 export { cloneRepoActivity } from './clone';
 export type { CloneInput, CloneOutput } from './clone';
 
+export { ensureWorkdirActivity } from './ensure-workdir';
+export type { EnsureWorkdirInput, EnsureWorkdirOutput } from './ensure-workdir';
+
 export { commitAllActivity } from './commit';
 export type { CommitInput, CommitOutput } from './commit';
 

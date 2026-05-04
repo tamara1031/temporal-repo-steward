@@ -85,6 +85,15 @@ export const ERR_RATE_LIMITED = 'RateLimited' as const;
  */
 export const ERR_CODEX_INVOCATION = 'CodexInvocationError' as const;
 
+/**
+ * A git activity's `workdir` no longer exists on the current worker pod.
+ * This happens when the pod is replaced between the workspace-creation activity
+ * (cloneRepoActivity) and a later git activity, because workspaces live in the
+ * pod-local /tmp directory.  Non-retryable so the activity fails fast and the
+ * workflow can trigger workspace recovery instead of burning retries.
+ */
+export const ERR_WORKDIR_MISSING = 'WorkdirMissing' as const;
+
 // ---------------------------------------------------------------------------
 // Proxy config arrays — imported by proxies.ts
 // ---------------------------------------------------------------------------
@@ -103,6 +112,7 @@ export const PROXY_NON_RETRYABLE = [
   ERR_INVALID_GIT_REF,
   ERR_INVALID_GH_OUTPUT,
   ERR_PLANNER_OUTPUT_INVALID,
+  ERR_WORKDIR_MISSING,
 ] as const;
 
 /**
@@ -130,4 +140,5 @@ export type KnownErrorType =
   | typeof ERR_PLANNER_OUTPUT_INVALID
   | typeof ERR_ADVISOR_OUTPUT_INVALID
   | typeof ERR_RATE_LIMITED
-  | typeof ERR_CODEX_INVOCATION;
+  | typeof ERR_CODEX_INVOCATION
+  | typeof ERR_WORKDIR_MISSING;
