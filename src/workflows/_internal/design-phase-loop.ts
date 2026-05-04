@@ -17,48 +17,10 @@
 
 import { log } from '@temporalio/workflow';
 import { planCodex } from '../proxies';
-import type { ContextArtifact, DesignPhaseRecord, DesignRound, PlanOutput, PlanReviewConcern, PlanStep } from '../../activities/refactor';
+import type { ContextArtifact, DesignPhaseRecord, DesignRound, PlanOutput, PlanReviewConcern } from '../../activities/refactor';
 import type { SpawnCounter } from './spawn-budget';
 import { collectFeedback } from './feedback';
-
-// ──────────────────────────────────────────────────────────────────────────
-// Structural equality helpers for PlanOutput
-// ──────────────────────────────────────────────────────────────────────────
-
-/**
- * Field-by-field equality for `PlanOutput`. Used instead of
- * `JSON.stringify(a) === JSON.stringify(b)` to avoid sensitivity to key
- * insertion order (which V8 currently preserves but is not part of the spec).
- */
-function stepsEqual(a: readonly PlanStep[], b: readonly PlanStep[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const sa = a[i];
-    const sb = b[i];
-    if (sa.title !== sb.title || sa.description !== sb.description) return false;
-    const ra = sa.critical_requirements;
-    const rb = sb.critical_requirements;
-    if (ra.length !== rb.length) return false;
-    for (let j = 0; j < ra.length; j++) {
-      if (ra[j] !== rb[j]) return false;
-    }
-    const ta = sa.target_files;
-    const tb = sb.target_files;
-    if (ta === undefined || tb === undefined) {
-      if (ta !== tb) return false;
-    } else {
-      if (ta.length !== tb.length) return false;
-      for (let j = 0; j < ta.length; j++) {
-        if (ta[j] !== tb[j]) return false;
-      }
-    }
-  }
-  return true;
-}
-
-function plansEqual(a: PlanOutput, b: PlanOutput): boolean {
-  return a.theme === b.theme && a.rationale === b.rationale && stepsEqual(a.steps, b.steps);
-}
+import { plansEqual } from './plan-equality';
 
 export interface DesignPhaseConfig {
   /**
