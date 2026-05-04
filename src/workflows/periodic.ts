@@ -139,7 +139,9 @@ export async function periodicRefactorWorkflow(
       return { skipped: 'no-op-plan' };
     }
 
-    const plan = designOutput.plan!;
+    // TypeScript narrows designOutput to { outcome: 'completed'; plan: PlanOutput; ... }
+    // after the plan-failed, budget-exhausted, and no-op guards above.
+    const plan = designOutput.plan;
     const plannedSteps = plan.steps.slice(0, MAX_STEPS);
     const droppedFromPlan = plan.steps.slice(MAX_STEPS);
 

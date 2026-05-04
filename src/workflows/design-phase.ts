@@ -24,8 +24,6 @@ import {
 
 export { DEFAULT_DESIGN_PHASE_CONFIG, type DesignPhaseConfig } from './_internal/design-phase-loop';
 
-export type DesignPhaseOutcome = 'completed' | 'no-op' | 'plan-failed' | 'budget-exhausted';
-
 export interface DesignPhaseInput {
   workdir: string;
   contextArtifact: ContextArtifact;
@@ -35,13 +33,26 @@ export interface DesignPhaseInput {
   config: DesignPhaseConfig;
 }
 
-export interface DesignPhaseOutput {
-  outcome: DesignPhaseOutcome;
-  plan?: PlanOutput;
-  designRecord?: DesignPhaseRecord;
-  /** Codex spawns consumed, broken down by role. */
-  spawnCounts: SpawnCounts;
-}
+/**
+ * Discriminated union returned by `designPhaseWorkflow`.
+ *
+ * Each variant carries exactly the fields that are meaningful for its `outcome`,
+ * enabling call sites to access `plan` and `designRecord` without defensive
+ * null checks after narrowing on `outcome`.
+ *
+ * - `completed`        — `plan` and `designRecord` are always present; proceed to implementation.
+ * - `no-op`            — planner returned no actionable theme; `plan` present for inspection.
+ * - `plan-failed`      — planner threw a non-retryable error; no plan available.
+ * - `budget-exhausted` — not enough spawn budget for even the initial plan call.
+ */
+export type DesignPhaseOutput =
+  | { outcome: 'completed'; plan: PlanOutput; designRecord: DesignPhaseRecord; spawnCounts: SpawnCounts }
+  | { outcome: 'no-op'; plan: PlanOutput; designRecord: DesignPhaseRecord; spawnCounts: SpawnCounts }
+  | { outcome: 'plan-failed'; spawnCounts: SpawnCounts }
+  | { outcome: 'budget-exhausted'; spawnCounts: SpawnCounts };
+
+/** Union of all possible `outcome` values. Derived from `DesignPhaseOutput` to stay in sync. */
+export type DesignPhaseOutcome = DesignPhaseOutput['outcome'];
 
 export async function designPhaseWorkflow(input: DesignPhaseInput): Promise<DesignPhaseOutput> {
   const spawnCounter = new SpawnCounter(input.spawnBudget);
