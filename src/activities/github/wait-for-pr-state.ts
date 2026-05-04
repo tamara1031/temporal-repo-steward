@@ -1,6 +1,7 @@
-import { Context, log } from '@temporalio/activity';
+import { log } from '@temporalio/activity';
 import { execOrThrow } from '../_internal/exec';
-import { ghEnv, sleepCancellable } from './_internal/gh-env';
+import { ghEnv } from './_internal/gh-env';
+import { withGitHubWaitHeartbeat } from './_internal/wait-heartbeat';
 import {
   parsePRStateJSON,
   type ObservePRStateOutput,
@@ -25,7 +26,6 @@ export interface WaitForPRStateOutput extends ObservePRStateOutput {
 
 const DEFAULT_POLL_INTERVAL_MS = 30 * 1000;
 const DEFAULT_MAX_WAIT_MS = 60 * 60 * 1000;
-const HEARTBEAT_TICK_MS = 30 * 1000;
 
 /**
  * Long-running PR lifecycle poll. This stays in an Activity so the wait can
@@ -35,48 +35,33 @@ export async function waitForPRStateActivity(
   input: WaitForPRStateInput,
 ): Promise<WaitForPRStateOutput> {
   const env = ghEnv();
-  const ctx = Context.current();
   const interval = input.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const deadline = Date.now() + (input.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
   const targetStates = new Set<PRLifecycleState>(input.targetStates ?? ['CLOSED', 'MERGED']);
 
   let lastObserved: ObservePRStateOutput | undefined;
-  let heartbeatRunning = true;
-  ctx.heartbeat({ phase: 'wait-pr-state', prNumber: input.prNumber });
-  const heartbeatTask = (async () => {
-    while (heartbeatRunning) {
-      try {
-        await sleepCancellable(HEARTBEAT_TICK_MS, ctx.cancellationSignal);
-      } catch {
-        return;
-      }
-      if (!heartbeatRunning) return;
-      ctx.heartbeat({ phase: 'wait-pr-state', prNumber: input.prNumber });
-    }
-  })();
-  heartbeatTask.catch(() => undefined);
 
-  try {
-    while (Date.now() < deadline) {
-      lastObserved = await observePRState(input.repoFullName, input.prNumber, env);
-      if (targetStates.has(lastObserved.state)) {
-        log.info('Observed target PR state', {
-          prNumber: input.prNumber,
-          state: lastObserved.state,
-        });
-        return { ...lastObserved, timedOut: false };
+  return withGitHubWaitHeartbeat(
+    { phase: 'wait-pr-state', prNumber: input.prNumber },
+    async ({ sleep }) => {
+      while (Date.now() < deadline) {
+        lastObserved = await observePRState(input.repoFullName, input.prNumber, env);
+        if (targetStates.has(lastObserved.state)) {
+          log.info('Observed target PR state', {
+            prNumber: input.prNumber,
+            state: lastObserved.state,
+          });
+          return { ...lastObserved, timedOut: false };
+        }
+        await sleep(interval);
       }
-      await sleepCancellable(interval, ctx.cancellationSignal);
-    }
 
-    return {
-      ...(lastObserved ?? { state: 'OPEN' as const }),
-      timedOut: true,
-    };
-  } finally {
-    heartbeatRunning = false;
-    await heartbeatTask.catch(() => undefined);
-  }
+      return {
+        ...(lastObserved ?? { state: 'OPEN' as const }),
+        timedOut: true,
+      };
+    },
+  );
 }
 
 async function observePRState(
