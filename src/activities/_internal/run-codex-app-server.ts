@@ -67,93 +67,110 @@ async function runTurn(
   prompt: string,
 ): Promise<CodexRunOutput> {
   const chunks: string[] = [];
-  // Captured once the turn/start response arrives — used for turn/interrupt on cancel.
   let turnId: string | undefined;
   let settled = false;
+  // Defined outside the Promise so .finally() can clear it regardless of path.
+  let hbTimer: ReturnType<typeof setInterval> | undefined;
 
-  // Heartbeat keeps the Temporal activity alive during long model turns.
-  // If the activity is cancelled, heartbeat() throws; we send turn/interrupt
-  // to the sidecar before the socket is closed.
-  const hbTimer = setInterval(() => {
-    try {
-      heartbeat();
-    } catch {
-      clearInterval(hbTimer);
-      if (turnId) {
-        try {
-          session.notify('turn/interrupt', { threadId, turnId });
-        } catch {
-          /* best-effort */
-        }
+  return new Promise<CodexRunOutput>((resolve, reject) => {
+    // Reject immediately if the socket closes or errors during streaming.
+    // Without this, a sidecar crash after turn/start resolves would leave
+    // the Promise pending until the activity's startToCloseTimeout fires.
+    session.onDisconnect((err) => {
+      if (!settled) {
+        settled = true;
+        reject(
+          ApplicationFailure.create({
+            message: `app-server WebSocket closed during turn: ${err?.message ?? 'connection lost'}`,
+            type: ERR_CODEX_INVOCATION,
+          }),
+        );
       }
-    }
-  }, HEARTBEAT_INTERVAL_MS);
+    });
 
-  try {
-    return await new Promise<CodexRunOutput>((resolve, reject) => {
-      session.onNotification((msg: Record<string, unknown>) => {
-        const method = msg.method as string | undefined;
-        const params = msg.params as Record<string, unknown> | undefined;
-        const turn = params?.turn as Record<string, unknown> | undefined;
-
-        if (method === 'item/agentMessage/delta') {
-          // delta is the text string directly (not an object).
-          const delta = params?.delta;
-          if (typeof delta === 'string' && delta) chunks.push(delta);
-          return;
-        }
-
-        if (method === 'turn/completed') {
-          if (settled) return;
+    // Heartbeat every 10 s to keep the Temporal activity alive.
+    // heartbeat() throws CancelledFailure when the activity has been
+    // cancelled by the Temporal server; we propagate that and send a
+    // best-effort turn/interrupt so the sidecar aborts the in-flight turn.
+    hbTimer = setInterval(() => {
+      try {
+        heartbeat();
+      } catch (cancelErr) {
+        if (!settled) {
           settled = true;
           clearInterval(hbTimer);
+          if (turnId) {
+            try {
+              session.notify('turn/interrupt', { threadId, turnId });
+            } catch {
+              /* best-effort */
+            }
+          }
+          reject(cancelErr);
+        }
+      }
+    }, HEARTBEAT_INTERVAL_MS);
 
-          const status = turn?.status as string | undefined;
-          if (status === 'failed') {
-            const err = turn?.error as Record<string, unknown> | undefined;
-            const errMsg = typeof err?.message === 'string' ? err.message : 'turn failed';
-            const httpCode =
-              typeof err?.httpStatusCode === 'number' ? err.httpStatusCode : 0;
-            reject(classifyError(errMsg, httpCode));
-            return;
-          }
-          // 'completed' or 'interrupted' — extract accumulated message.
-          let lastMessage = chunks.join('').trim();
-          if (!lastMessage) {
-            lastMessage = extractFromTurnItems((turn?.items as unknown[]) ?? []);
-          }
-          resolve({ lastMessage, stdoutForLog: lastMessage });
+    session.onNotification((msg: Record<string, unknown>) => {
+      const method = msg.method as string | undefined;
+      const params = msg.params as Record<string, unknown> | undefined;
+      const turn = params?.turn as Record<string, unknown> | undefined;
+
+      if (method === 'item/agentMessage/delta') {
+        // delta is the text string directly (not a nested object).
+        const delta = params?.delta;
+        if (typeof delta === 'string' && delta) chunks.push(delta);
+        return;
+      }
+
+      if (method === 'turn/completed') {
+        if (settled) return;
+        settled = true;
+        clearInterval(hbTimer);
+
+        const status = turn?.status as string | undefined;
+        if (status === 'failed') {
+          const err = turn?.error as Record<string, unknown> | undefined;
+          const errMsg = typeof err?.message === 'string' ? err.message : 'turn failed';
+          const httpCode =
+            typeof err?.httpStatusCode === 'number' ? err.httpStatusCode : 0;
+          reject(classifyError(errMsg, httpCode));
+          return;
+        }
+        // 'completed' or 'interrupted' — extract accumulated message.
+        let lastMessage = chunks.join('').trim();
+        if (!lastMessage) {
+          lastMessage = extractFromTurnItems((turn?.items as unknown[]) ?? []);
+        }
+        resolve({ lastMessage, stdoutForLog: lastMessage });
+      }
+    });
+
+    // Kick off the turn. Capture turnId from response for interrupt-on-cancel.
+    const turnParams: Record<string, unknown> = {
+      threadId,
+      input: [{ type: 'text', text: prompt }],
+      cwd,
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    };
+    if (model) turnParams.model = model;
+
+    session
+      .request('turn/start', turnParams)
+      .then((result) => {
+        const r = result as Record<string, unknown>;
+        const t = r?.turn as Record<string, unknown> | undefined;
+        if (typeof t?.id === 'string') turnId = t.id;
+      })
+      .catch((err: Error) => {
+        if (!settled) {
+          settled = true;
+          clearInterval(hbTimer);
+          reject(classifyError(err.message, 0));
         }
       });
-
-      // Kick off the turn. Capture turnId from response for interrupt-on-cancel.
-      const turnParams: Record<string, unknown> = {
-        threadId,
-        input: [{ type: 'text', text: prompt }],
-        cwd,
-        approvalPolicy: 'never',
-        sandboxPolicy: { type: 'dangerFullAccess' },
-      };
-      if (model) turnParams.model = model;
-
-      session
-        .request('turn/start', turnParams)
-        .then((result) => {
-          const r = result as Record<string, unknown>;
-          const t = r?.turn as Record<string, unknown> | undefined;
-          if (typeof t?.id === 'string') turnId = t.id;
-        })
-        .catch((err: Error) => {
-          if (!settled) {
-            settled = true;
-            clearInterval(hbTimer);
-            reject(classifyError(err.message, 0));
-          }
-        });
-    });
-  } finally {
-    clearInterval(hbTimer);
-  }
+  }).finally(() => clearInterval(hbTimer));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -252,6 +269,22 @@ class AppServerSession {
 
   onNotification(handler: (msg: Record<string, unknown>) => void): void {
     this.notificationHandler = handler;
+  }
+
+  /**
+   * Register a handler called at most once when the underlying WebSocket
+   * closes or errors.  Used to abort in-flight turn streaming.
+   */
+  onDisconnect(handler: (err?: Error) => void): void {
+    let fired = false;
+    const fire = (err?: Error) => {
+      if (!fired) {
+        fired = true;
+        handler(err);
+      }
+    };
+    this.ws.once('close', () => fire());
+    this.ws.once('error', fire);
   }
 }
 
