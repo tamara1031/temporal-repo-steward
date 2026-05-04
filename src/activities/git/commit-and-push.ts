@@ -1,5 +1,5 @@
 import { execOrThrow } from '../_internal/exec';
-import { ghAuthEnv } from './_internal/git-env';
+import { fetchRemoteBranchRefSpec, ghAuthEnv } from './_internal/git-env';
 
 export interface CommitAndPushInput {
   workdir: string;
@@ -48,7 +48,7 @@ export async function commitAndPushActivity(
 
   // Refresh the remote-tracking ref.  If this fails (e.g. the branch has not
   // been pushed yet) that is a caller error, so we let execOrThrow propagate.
-  await execOrThrow('git', ['fetch', 'origin', input.branch], { cwd: input.workdir, env });
+  await execOrThrow('git', ['fetch', 'origin', fetchRemoteBranchRefSpec(input.branch)], { cwd: input.workdir, env });
 
   const localSha = (
     await execOrThrow('git', ['rev-parse', 'HEAD'], { cwd: input.workdir })
