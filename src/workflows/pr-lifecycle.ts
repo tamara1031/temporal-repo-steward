@@ -38,6 +38,13 @@ export interface RobustPRMergeInput {
   postMergePollAttempts?: number;
 }
 
+export type PRMergeOutcome =
+  | 'merged'
+  | 'merge-queued'
+  | 'auto-merge-disabled'
+  | 'closed-externally'
+  | 'merged-externally';
+
 export interface RobustPRMergeOutput {
   prNumber: number;
   prUrl: string;
@@ -57,12 +64,7 @@ export interface RobustPRMergeOutput {
    *  - `closed-externally` / `merged-externally`: the PR was closed or merged
    *    by something other than this workflow during the CI loop.
    */
-  outcome:
-    | 'merged'
-    | 'merge-queued'
-    | 'auto-merge-disabled'
-    | 'closed-externally'
-    | 'merged-externally';
+  outcome: PRMergeOutcome;
   /** Number of advisor consults actually performed. */
   advisorConsults: number;
   /** Audit trail of advisor consultations, surfaced for the operator. */
@@ -131,7 +133,7 @@ export async function robustPRMergeWorkflow(
   const finalize = (
     iters: number,
     merged: boolean,
-    outcome: RobustPRMergeOutput['outcome'],
+    outcome: PRMergeOutcome,
   ): RobustPRMergeOutput => ({
     prNumber: pr.number,
     prUrl: pr.url,
@@ -268,7 +270,7 @@ function handleExternalExit(
   finalize: (
     iters: number,
     merged: boolean,
-    outcome: RobustPRMergeOutput['outcome'],
+    outcome: PRMergeOutcome,
   ) => RobustPRMergeOutput,
 ): RobustPRMergeOutput | undefined {
   if (ci.status === 'timeout') {
