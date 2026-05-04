@@ -8,6 +8,7 @@ import {
 } from '@temporalio/workflow';
 import { cheap, heavy, contextCodex } from './proxies';
 import { robustPRMergeWorkflow } from './pr-lifecycle';
+import type { PRMergeOutcome } from './pr-lifecycle';
 import { refactorStepWorkflow } from './refactor-step';
 import { designPhaseWorkflow, DEFAULT_DESIGN_PHASE_CONFIG } from './design-phase';
 import type { ContextArtifact } from '../activities/refactor';
@@ -43,12 +44,7 @@ export interface PeriodicRefactorOutput {
    * operator distinguish "merge actually landed" from "merge queued" or
    * "merge superseded by an external close/merge".
    */
-  prOutcome?:
-    | 'merged'
-    | 'merge-queued'
-    | 'auto-merge-disabled'
-    | 'closed-externally'
-    | 'merged-externally';
+  prOutcome?: PRMergeOutcome;
   /**
    * Combined advisor audit trail (this workflow + child). The PR body
    * already lists the periodic-side consults; the child's are appended here
