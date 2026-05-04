@@ -1,12 +1,8 @@
 import { log } from '@temporalio/activity';
-import { execOrThrow } from '../_internal/exec';
 import { ghEnv } from './_internal/gh-env';
+import { observePRState } from './_internal/pr-state';
 import { withGitHubWaitHeartbeat } from './_internal/wait-heartbeat';
-import {
-  parsePRStateJSON,
-  type ObservePRStateOutput,
-  type PRLifecycleState,
-} from './observe-pr-state';
+import { type ObservePRStateOutput, type PRLifecycleState } from './observe-pr-state';
 
 export interface WaitForPRStateInput {
   repoFullName: string;
@@ -62,25 +58,4 @@ export async function waitForPRStateActivity(
       };
     },
   );
-}
-
-async function observePRState(
-  repoFullName: string,
-  prNumber: number,
-  env: NodeJS.ProcessEnv,
-): Promise<ObservePRStateOutput> {
-  const res = await execOrThrow(
-    'gh',
-    [
-      'pr',
-      'view',
-      String(prNumber),
-      '--repo',
-      repoFullName,
-      '--json',
-      'state,mergedAt',
-    ],
-    { env },
-  );
-  return parsePRStateJSON(res.stdout);
 }

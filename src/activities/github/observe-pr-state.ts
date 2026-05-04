@@ -1,8 +1,11 @@
-import { execOrThrow } from '../_internal/exec';
 import { ghEnv } from './_internal/gh-env';
-import { invalidGhOutput, isRecord, parseGhJSON } from './_internal/gh-json';
+import {
+  observePRState,
+  parsePRStateJSON as parsePRStateJSONInternal,
+  type PRLifecycleState as InternalPRLifecycleState,
+} from './_internal/pr-state';
 
-export type PRLifecycleState = 'OPEN' | 'CLOSED' | 'MERGED';
+export type PRLifecycleState = InternalPRLifecycleState;
 
 export interface ObservePRStateInput {
   repoFullName: string;
@@ -26,39 +29,9 @@ export async function observePRStateActivity(
   input: ObservePRStateInput,
 ): Promise<ObservePRStateOutput> {
   const env = ghEnv();
-  const res = await execOrThrow(
-    'gh',
-    [
-      'pr',
-      'view',
-      String(input.prNumber),
-      '--repo',
-      input.repoFullName,
-      '--json',
-      'state,mergedAt',
-    ],
-    { env },
-  );
-  return parsePRStateJSON(res.stdout);
+  return observePRState(input.repoFullName, input.prNumber, env);
 }
 
 export function parsePRStateJSON(stdout: string): ObservePRStateOutput {
-  const data = parseGhJSON(stdout, 'gh pr view --json state,mergedAt');
-  if (!isRecord(data)) {
-    throw invalidGhOutput('gh pr view --json state,mergedAt output must be a JSON object');
-  }
-  const stateRaw = data.state;
-  if (stateRaw !== 'OPEN' && stateRaw !== 'CLOSED' && stateRaw !== 'MERGED') {
-    throw invalidGhOutput(
-      `gh pr view returned unexpected state ${JSON.stringify(stateRaw)}; expected OPEN|CLOSED|MERGED`,
-    );
-  }
-  const mergedAtRaw = data.mergedAt;
-  if (mergedAtRaw !== undefined && mergedAtRaw !== null && typeof mergedAtRaw !== 'string') {
-    throw invalidGhOutput('gh pr view returned non-string mergedAt');
-  }
-  return {
-    state: stateRaw,
-    ...(typeof mergedAtRaw === 'string' && mergedAtRaw.length > 0 ? { mergedAt: mergedAtRaw } : {}),
-  };
+  return parsePRStateJSONInternal(stdout);
 }

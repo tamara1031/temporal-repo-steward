@@ -1,8 +1,7 @@
 import { Context, log } from '@temporalio/activity';
-import { execOrThrow } from '../_internal/exec';
 import { ghEnv, sleepCancellable } from './_internal/gh-env';
 import { pollPostMergeOutcome, type PostMergeOutcome } from './_internal/post-merge-poll';
-import { parsePRStateJSON } from './observe-pr-state';
+import { observePRState } from './_internal/pr-state';
 
 export interface WaitForPostMergeInput {
   repoFullName: string;
@@ -33,20 +32,7 @@ export async function waitForPostMergeActivity(
     },
     {
       observe: async () => {
-        const res = await execOrThrow(
-          'gh',
-          [
-            'pr',
-            'view',
-            String(input.prNumber),
-            '--repo',
-            input.repoFullName,
-            '--json',
-            'state,mergedAt',
-          ],
-          { env },
-        );
-        return parsePRStateJSON(res.stdout);
+        return observePRState(input.repoFullName, input.prNumber, env);
       },
       heartbeat: (details) => ctx.heartbeat(details),
       sleep: (ms) => sleepCancellable(ms, ctx.cancellationSignal),
