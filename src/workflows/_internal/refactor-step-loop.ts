@@ -37,14 +37,8 @@ import type {
 import { arraysEqual, diffPorcelain } from './porcelain';
 import { collectFeedback, summarizeReviews } from './feedback';
 import { AdvisorBudget, consultAdvisor, type AdvisorAuditEntry } from './advisor';
-import type { StepRecord } from './refactor-report';
+import type { CircuitBreaker, StepRecord } from './step-types';
 import type { SpawnCounter } from './spawn-budget';
-
-export interface CircuitBreaker {
-  step: PlanStep;
-  concern: ReviewConcern;
-  bullets: string[];
-}
 
 export type StepLoopResult =
   | { kind: 'completed'; record: StepRecord }

@@ -22,10 +22,9 @@ import { AdvisorBudget, type AdvisorAuditEntry } from './_internal/advisor';
 import { SpawnCounter, type SpawnCounts } from './_internal/spawn-budget';
 import {
   runRefactorStep,
-  type CircuitBreaker,
   type StepLoopConfig,
 } from './_internal/refactor-step-loop';
-import type { StepRecord } from './_internal/refactor-report';
+import type { CircuitBreaker, StepRecord } from './_internal/step-types';
 
 // Re-export the canonical default so consumers (orchestrators + tests) get
 // `refactorStepWorkflow` and its config defaults from a single import path.

@@ -13,12 +13,10 @@ import { refactorStepWorkflow } from './refactor-step';
 import { designPhaseWorkflow, DEFAULT_DESIGN_PHASE_CONFIG } from './design-phase';
 import type { ContextArtifact } from '../activities/refactor';
 import { AdvisorBudget, type AdvisorAuditEntry } from './_internal/advisor';
-import { renderReport, type StepRecord } from './_internal/refactor-report';
+import { renderReport } from './_internal/refactor-report';
 import { DEFAULT_PERIODIC_SPAWN_CAP, SpawnCounter } from './_internal/spawn-budget';
-import {
-  DEFAULT_STEP_LOOP_CONFIG,
-  type CircuitBreaker,
-} from './_internal/refactor-step-loop';
+import { DEFAULT_STEP_LOOP_CONFIG } from './_internal/refactor-step-loop';
+import type { CircuitBreaker, StepRecord } from './_internal/step-types';
 import { recoverWorkdir } from './_internal/workdir-recovery';
 
 export interface PeriodicRefactorInput {
