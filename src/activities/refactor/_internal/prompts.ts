@@ -83,9 +83,9 @@ Hard rules:
 
 Output: EXACTLY one JSON object, nothing else.
 Required fields:
-- `overview`: 3-8 sentences describing what the repo does, primary language/framework, and top-level layout.
-- `conventions`: 0-8 short strings describing testable invariants the next steps must respect.
-- `interfaces`: 0-8 short strings describing stable signatures or shared types worth knowing.
+- \`overview\`: 3-8 sentences describing what the repo does, primary language/framework, and top-level layout.
+- \`conventions\`: 0-8 short strings describing testable invariants the next steps must respect.
+- \`interfaces\`: 0-8 short strings describing stable signatures or shared types worth knowing.
 
 Example JSON output:
 {
@@ -111,12 +111,12 @@ Process:
 
 Output: reply with EXACTLY one JSON object as the very first character of your reply. No prose, no markdown fences, no acknowledgments.
 Required fields:
-- `theme`: concise name for the refactor theme.
-- `rationale`: why this theme is worth doing.
-- `steps`: 1-2 step objects unless no worthwhile theme exists.
-- Each step has `title`, `description`, and at least one `critical_requirements` string.
-- Each step may include `target_files` with repo-relative paths the implementer is expected to modify.
-- If no worthwhile theme exists, set `theme` to `no-op`, explain why in `rationale`, and return an empty `steps` array.
+- \`theme\`: concise name for the refactor theme.
+- \`rationale\`: why this theme is worth doing.
+- \`steps\`: 1-2 step objects unless no worthwhile theme exists.
+- Each step has \`title\`, \`description\`, and at least one \`critical_requirements\` string.
+- Each step may include \`target_files\` with repo-relative paths the implementer is expected to modify.
+- If no worthwhile theme exists, set \`theme\` to \`no-op\`, explain why in \`rationale\`, and return an empty \`steps\` array.
 
 Example JSON output:
 {
@@ -219,9 +219,9 @@ ${spec.checklist.map((c) => `- ${c}`).join('\n')}
 
 Output: EXACTLY one JSON object, nothing else.
 Required fields:
-- `verdict`: `ok` or `needs_revision`.
-- `blocking_issues`: concrete issues that should block implementation, or an empty array.
-- `suggestions`: non-blocking improvements, or an empty array.
+- \`verdict\`: \`ok\` or \`needs_revision\`.
+- \`blocking_issues\`: concrete issues that should block implementation, or an empty array.
+- \`suggestions\`: non-blocking improvements, or an empty array.
 
 Example JSON output:
 {
@@ -251,12 +251,12 @@ Hard rules (in addition to the global rules above):
 
 Output: EXACTLY one JSON object with the same shape as the planner output.
 Required fields:
-- `theme`: concise name for the refactor theme.
-- `rationale`: why this theme is worth doing.
-- `steps`: 1-2 step objects unless no worthwhile theme exists.
-- Each step has `title`, `description`, and at least one `critical_requirements` string.
-- Each step may include `target_files` with repo-relative paths the implementer is expected to modify.
-- If no worthwhile theme exists, set `theme` to `no-op`, explain why in `rationale`, and return an empty `steps` array.
+- \`theme\`: concise name for the refactor theme.
+- \`rationale\`: why this theme is worth doing.
+- \`steps\`: 1-2 step objects unless no worthwhile theme exists.
+- Each step has \`title\`, \`description\`, and at least one \`critical_requirements\` string.
+- Each step may include \`target_files\` with repo-relative paths the implementer is expected to modify.
+- If no worthwhile theme exists, set \`theme\` to \`no-op\`, explain why in \`rationale\`, and return an empty \`steps\` array.
 
 Example JSON output:
 {
@@ -342,9 +342,9 @@ ${spec.checklist.map((c) => `- ${c}`).join('\n')}
 
 Output: EXACTLY one JSON object, nothing else.
 Required fields:
-- `verdict`: `ok`, `needs_revision`, or `critical_block`.
-- `blocking_issues`: concrete issues for the implementer or workflow to address, or an empty array.
-- `suggestions`: non-blocking improvements, or an empty array.
+- \`verdict\`: \`ok\`, \`needs_revision\`, or \`critical_block\`.
+- \`blocking_issues\`: concrete issues for the implementer or workflow to address, or an empty array.
+- \`suggestions\`: non-blocking improvements, or an empty array.
 
 Example JSON output:
 {
