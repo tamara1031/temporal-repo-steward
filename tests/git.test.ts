@@ -4,11 +4,14 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  cloneRepoActivity,
+  ensureWorkdirActivity,
   fetchRemoteBranchRefSpec,
   remoteBranchRef,
   restoreActivity,
 } from '../src/activities/git';
 import { execOrThrow } from '../src/activities/_internal/exec';
+import { ERR_MISSING_CREDENTIALS } from '../src/errors';
 
 describe('git activity helpers', () => {
   it('builds a remote-tracking ref for non-default base branches', () => {
@@ -23,6 +26,88 @@ describe('git activity helpers', () => {
 
   it('rejects empty base branches before invoking git', () => {
     expect(() => remoteBranchRef('   ')).toThrow('base branch must not be empty');
+  });
+});
+
+describe('git workspace activity validation', () => {
+  const originalEnv = {
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GIT_BOT_NAME: process.env.GIT_BOT_NAME,
+    GIT_BOT_EMAIL: process.env.GIT_BOT_EMAIL,
+  };
+
+  let workspaceRoot = '';
+
+  function restoreEnv(name: keyof typeof originalEnv): void {
+    const value = originalEnv[name];
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+
+  beforeEach(async () => {
+    workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'git-workspace-validation-'));
+    process.env.GITHUB_TOKEN = 'test-token';
+    delete process.env.GIT_BOT_NAME;
+    delete process.env.GIT_BOT_EMAIL;
+  });
+
+  afterEach(async () => {
+    restoreEnv('GITHUB_TOKEN');
+    restoreEnv('GIT_BOT_NAME');
+    restoreEnv('GIT_BOT_EMAIL');
+    if (workspaceRoot) await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  function inActivity<R>(fn: () => Promise<R>): Promise<R> {
+    return new MockActivityEnvironment().run<[], R, () => Promise<R>>(fn);
+  }
+
+  async function expectMissingBotIdentity(run: () => Promise<unknown>): Promise<void> {
+    await expect(run()).rejects.toMatchObject({
+      type: ERR_MISSING_CREDENTIALS,
+      nonRetryable: true,
+    });
+  }
+
+  it('cloneRepoActivity and ensureWorkdirActivity share bot identity validation behavior', async () => {
+    await expectMissingBotIdentity(() =>
+      inActivity(() =>
+        cloneRepoActivity({
+          repoFullName: 'owner/repo',
+          branch: 'steward/test',
+          workspaceRoot,
+        }),
+      ),
+    );
+
+    await expectMissingBotIdentity(() =>
+      inActivity(() =>
+        ensureWorkdirActivity({
+          workdir: path.join(workspaceRoot, 'missing-workdir'),
+          repoFullName: 'owner/repo',
+          branch: 'steward/test',
+          workspaceRoot,
+        }),
+      ),
+    );
+  });
+
+  it('ensureWorkdirActivity returns an existing workdir without credential validation', async () => {
+    delete process.env.GITHUB_TOKEN;
+
+    await expect(
+      inActivity(() =>
+        ensureWorkdirActivity({
+          workdir: workspaceRoot,
+          repoFullName: 'owner/repo',
+          branch: 'steward/test',
+          workspaceRoot,
+        }),
+      ),
+    ).resolves.toEqual({ workdir: workspaceRoot });
   });
 });
 

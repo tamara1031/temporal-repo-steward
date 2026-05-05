@@ -1,11 +1,11 @@
 import type { PRLifecycleState } from '../observe-pr-state';
-import { pollWithBudget } from './polling-budget';
+import {
+  GITHUB_POST_MERGE_POLL_DEFAULTS,
+  normalizeAttemptPollTimingWithDefaults,
+  pollWithBudget,
+} from './polling-budget';
 
 export type PostMergeOutcome = 'merged' | 'merge-queued' | 'closed-externally';
-
-const DEFAULT_POST_MERGE_POLL_ATTEMPTS = 6;
-const DEFAULT_POST_MERGE_POLL_INTERVAL_MS = 10_000;
-const MAX_POST_MERGE_ACTIVITY_WAIT_MS = 4 * 60 * 1000;
 
 export interface PostMergePollOptions {
   prNumber: number;
@@ -28,24 +28,22 @@ export async function pollPostMergeOutcome(
   input: PostMergePollOptions,
   deps: PostMergePollDeps,
 ): Promise<PostMergeOutcome> {
-  const attempts = Math.max(
-    1,
-    Math.floor(input.maxPollAttempts ?? DEFAULT_POST_MERGE_POLL_ATTEMPTS),
-  );
-  const intervalMs = Math.floor(input.pollIntervalMs ?? DEFAULT_POST_MERGE_POLL_INTERVAL_MS);
-  const maxActivityWaitMs = Math.max(
-    0,
-    Math.floor(input.maxActivityWaitMs ?? MAX_POST_MERGE_ACTIVITY_WAIT_MS),
-  );
+  const timing = normalizeAttemptPollTimingWithDefaults({
+    nowMs: deps.now(),
+    intervalMs:
+      input.pollIntervalMs === undefined ? undefined : Math.floor(input.pollIntervalMs),
+    attempts: input.maxPollAttempts,
+    maxWaitMs: input.maxActivityWaitMs,
+    defaults: GITHUB_POST_MERGE_POLL_DEFAULTS,
+  });
 
   return pollWithBudget<PostMergeOutcome>({
-    intervalMs,
-    defaultIntervalMs: DEFAULT_POST_MERGE_POLL_INTERVAL_MS,
-    deadlineMs: (normalizedIntervalMs) =>
-      deps.now() + Math.min(attempts * normalizedIntervalMs, maxActivityWaitMs),
+    intervalMs: timing.intervalMs,
+    defaultIntervalMs: GITHUB_POST_MERGE_POLL_DEFAULTS.intervalMs,
+    deadlineMs: timing.deadlineMs,
     now: deps.now,
     sleep: deps.sleep,
-    maxAttempts: attempts,
+    maxAttempts: timing.attempts,
     observeAtDeadline: true,
     observe: async () => {
       const observed = await deps.observe();

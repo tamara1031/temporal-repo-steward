@@ -1,11 +1,15 @@
 /**
- * Refactor PR-body renderer + the workflow-local types it needs.
+ * Refactor PR-body renderer.
  *
  * Lives in `_internal/` because it is pure formatting — no Temporal API,
  * no clock, no randomness — but it is only ever consumed by the periodic
  * refactor workflow. Keeping it out of `periodic.ts` lets the orchestrator
  * read top-to-bottom as a sequence of intents instead of mixing string
  * assembly with Activity calls.
+ *
+ * Domain types (`StepRecord`, `ParliamentSummary`, `CircuitBreaker`) live in
+ * `step-types.ts`.  They are re-exported here so existing imports continue to
+ * resolve; new code should import directly from `step-types.ts`.
  *
  * Determinism: the function is a pure mapping from `ReportInput` to
  * `string`; safe to import from any workflow file.
@@ -14,41 +18,15 @@ import type {
   DesignPhaseRecord,
   PlanOutput,
   PlanStep,
-  ReviewConcern,
-  ReviewOutput,
 } from '../../activities/refactor';
 import type { AdvisorAuditEntry } from './advisor';
-
-/**
- * Per-step ledger entry retained for the final PR body. Workflow state stays
- * small — we keep only what the report needs, not raw codex output.
- */
-export interface StepRecord {
-  step: PlanStep;
-  outcome:
-    | 'converged'
-    | 'parliament-skipped'
-    | 'dropped-no-progress'
-    | 'dropped-not-converged'
-    | 'rolled-back-critical-block';
-  iters: number;
-  implementReports: string[];
-  parliamentSummary: ParliamentSummary[];
-  driftReverts: string[];
-}
-
-export interface ParliamentSummary {
-  iter: number;
-  /** Empty when Parliament was skipped (trivial diff). */
-  reviews: { concern: ReviewConcern; verdict: ReviewOutput['verdict']; bullets: string[] }[];
-  skipped?: 'trivial-diff';
-}
+import type { CircuitBreaker, StepRecord } from './step-types';
 
 export interface ReportInput {
   plan: PlanOutput;
   droppedFromPlan: PlanStep[];
   stepRecords: StepRecord[];
-  circuitBroken?: { step: PlanStep; concern: ReviewConcern; bullets: string[] };
+  circuitBroken?: CircuitBreaker;
   spawnSummary: { total: number; cap: number; perRole: Record<string, number> };
   branch: string;
   advisorAudits: AdvisorAuditEntry[];

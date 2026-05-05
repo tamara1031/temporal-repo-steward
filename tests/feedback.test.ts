@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { collectFeedback } from '../src/workflows/_internal/feedback';
+import { collectFeedback, summarizeReviews } from '../src/workflows/_internal/feedback';
 
 const reviewOk = { blocking_issues: [], suggestions: [] };
 const reviewNeeds = {
+  verdict: 'needs_revision',
   blocking_issues: ['missing null check', 'unsafe cast'],
   suggestions: ['add early return', 'use type assertion', 'run tests'],
 };
 const reviewCritical = {
+  verdict: 'critical_block',
   blocking_issues: ['credential leak'],
   suggestions: ['rotate token', 'add secret scanning'],
 };
@@ -83,5 +85,49 @@ describe('collectFeedback', () => {
     const result = collectFeedback([planReview], ['feasibility']);
     expect(result).toContain('[feasibility] plan too broad');
     expect(result).toContain('[feasibility] narrow the scope');
+  });
+});
+
+describe('summarizeReviews', () => {
+  it('preserves review order and zips concern labels by index', () => {
+    expect(
+      summarizeReviews(
+        [reviewNeeds, reviewCritical],
+        ['correctness', 'quality'],
+      ).map((r) => r.concern),
+    ).toEqual(['correctness', 'quality']);
+  });
+
+  it('copies verdicts through unchanged', () => {
+    expect(summarizeReviews([reviewNeeds, reviewCritical], ['correctness', 'quality'])).toEqual([
+      expect.objectContaining({ concern: 'correctness', verdict: 'needs_revision' }),
+      expect.objectContaining({ concern: 'quality', verdict: 'critical_block' }),
+    ]);
+  });
+
+  it('caps bullets at three after blocking issues then suggestions', () => {
+    expect(summarizeReviews([reviewNeeds], ['correctness'])).toEqual([
+      {
+        concern: 'correctness',
+        verdict: 'needs_revision',
+        bullets: ['missing null check', 'unsafe cast', 'add early return'],
+      },
+    ]);
+  });
+
+  it('supports plan-review-shaped verdicts and concerns', () => {
+    const planReview = {
+      verdict: 'ok',
+      blocking_issues: [],
+      suggestions: ['keep scope narrow', 'preserve ordering', 'avoid drift', 'run tests'],
+    };
+
+    expect(summarizeReviews([planReview], ['scope'])).toEqual([
+      {
+        concern: 'scope',
+        verdict: 'ok',
+        bullets: ['keep scope narrow', 'preserve ordering', 'avoid drift'],
+      },
+    ]);
   });
 });

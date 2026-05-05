@@ -69,12 +69,11 @@ describe('designPhaseWorkflow', () => {
     const { result, calls } = await runWorkflow('design-phase-converged', baseInput);
 
     expect(result.outcome).toBe('completed');
-    expect(result.plan).toBeDefined();
-    expect(result.plan?.theme).toBe('tighten module boundaries');
-    expect(result.designRecord).toBeDefined();
-    expect(result.designRecord?.outcome).toBe('converged');
-    expect(result.designRecord?.iters).toBe(1);
-    expect(result.designRecord?.rounds).toHaveLength(1);
+    if (result.outcome !== 'completed') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.plan.theme).toBe('tighten module boundaries');
+    expect(result.designRecord.outcome).toBe('converged');
+    expect(result.designRecord.iters).toBe(1);
+    expect(result.designRecord.rounds).toHaveLength(1);
 
     // 1 planner + 2 plan-reviewers; no refiner (converged on round 0).
     expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2 });
@@ -92,9 +91,10 @@ describe('designPhaseWorkflow', () => {
     });
 
     expect(result.outcome).toBe('completed');
+    if (result.outcome !== 'completed') throw new Error(`unexpected outcome: ${result.outcome}`);
     expect(result.plan).toBeDefined();
-    expect(result.designRecord?.outcome).toBe('single-shot');
-    expect(result.designRecord?.rounds).toHaveLength(0);
+    expect(result.designRecord.outcome).toBe('single-shot');
+    expect(result.designRecord.rounds).toHaveLength(0);
 
     // Only the planner ran.
     expect(result.spawnCounts).toEqual({ planner: 1 });
@@ -115,12 +115,32 @@ describe('designPhaseWorkflow', () => {
     });
 
     expect(result.outcome).toBe('no-op');
-    expect(result.plan?.theme).toBe('no-op');
+    if (result.outcome !== 'no-op') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.plan.theme).toBe('no-op');
     // Parliament should not run for a no-op plan.
     expect(result.spawnCounts).toEqual({ planner: 1 });
 
     const names = calls.log.map((c) => c.name);
     expect(names).not.toContain('reviewPlanActivity');
+  });
+
+  it('returns no-op when the planner returns no steps', async () => {
+    const { result, calls } = await runWorkflow('design-phase-empty-plan', baseInput, {
+      planActivity: async () => ({
+        theme: 'tighten module boundaries',
+        rationale: 'no actionable work survived planning',
+        steps: [],
+      }),
+    });
+
+    expect(result.outcome).toBe('no-op');
+    if (result.outcome !== 'no-op') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.plan.steps).toEqual([]);
+    expect(result.spawnCounts).toEqual({ planner: 1 });
+
+    const names = calls.log.map((c) => c.name);
+    expect(names).not.toContain('reviewPlanActivity');
+    expect(names).not.toContain('refinePlanActivity');
   });
 
   it('returns plan-failed when the planner throws a non-retryable error', async () => {
@@ -134,7 +154,7 @@ describe('designPhaseWorkflow', () => {
     });
 
     expect(result.outcome).toBe('plan-failed');
-    expect(result.plan).toBeUndefined();
+    // plan is absent on 'plan-failed' — guaranteed by the discriminated union.
     expect(result.spawnCounts).toEqual({ planner: 1 });
 
     const names = calls.log.map((c) => c.name);
@@ -148,7 +168,7 @@ describe('designPhaseWorkflow', () => {
     });
 
     expect(result.outcome).toBe('budget-exhausted');
-    expect(result.plan).toBeUndefined();
+    // plan is absent on 'budget-exhausted' — guaranteed by the discriminated union.
     expect(result.spawnCounts).toEqual({});
 
     const names = calls.log.map((c) => c.name);
@@ -190,10 +210,83 @@ describe('designPhaseWorkflow', () => {
     );
 
     expect(result.outcome).toBe('completed');
-    expect(result.designRecord?.outcome).toBe('max-rounds');
-    expect(result.designRecord?.iters).toBe(1);
+    if (result.outcome !== 'completed') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.designRecord.outcome).toBe('max-rounds');
+    expect(result.designRecord.iters).toBe(1);
 
     // 1 planner + 2 reviewers + 1 refiner (one round of review+refine).
+    expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
+
+    const names = calls.log.map((c) => c.name);
+    expect(names.filter((n) => n === 'reviewPlanActivity').length).toBe(2);
+    expect(names.filter((n) => n === 'refinePlanActivity').length).toBe(1);
+  });
+
+  it('returns no-op when refinement changes the theme to no-op', async () => {
+    const { result, calls } = await runWorkflow(
+      'design-phase-refined-noop-theme',
+      {
+        ...baseInput,
+        config: { maxRounds: 2, reviewerConcerns: ['feasibility', 'scope'] },
+      },
+      {
+        reviewPlanActivity: async () => ({
+          verdict: 'needs_revision' as const,
+          blocking_issues: ['all proposed work is unnecessary'],
+          suggestions: ['return no-op'],
+        }),
+        refinePlanActivity: async () => ({
+          theme: 'no-op',
+          rationale: 'review found no actionable work',
+          steps: [
+            {
+              title: 'not actionable',
+              description: 'placeholder retained by refiner',
+              critical_requirements: ['must not run implementation'],
+            },
+          ],
+        }),
+      },
+    );
+
+    expect(result.outcome).toBe('no-op');
+    if (result.outcome !== 'no-op') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.plan.theme).toBe('no-op');
+    expect(result.designRecord.iters).toBe(1);
+    expect(result.designRecord.rounds).toHaveLength(1);
+    expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
+
+    const names = calls.log.map((c) => c.name);
+    expect(names.filter((n) => n === 'reviewPlanActivity').length).toBe(2);
+    expect(names.filter((n) => n === 'refinePlanActivity').length).toBe(1);
+  });
+
+  it('returns no-op when refinement removes all steps', async () => {
+    const { result, calls } = await runWorkflow(
+      'design-phase-refined-noop-empty-steps',
+      {
+        ...baseInput,
+        config: { maxRounds: 2, reviewerConcerns: ['feasibility', 'scope'] },
+      },
+      {
+        reviewPlanActivity: async () => ({
+          verdict: 'needs_revision' as const,
+          blocking_issues: ['there is no safe actionable change'],
+          suggestions: ['remove all steps'],
+        }),
+        refinePlanActivity: async () => ({
+          theme: 'tighten module boundaries',
+          rationale: 'review removed the proposed work',
+          steps: [],
+        }),
+      },
+    );
+
+    expect(result.outcome).toBe('no-op');
+    if (result.outcome !== 'no-op') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.plan.steps).toEqual([]);
+    expect(result.designRecord.iters).toBe(1);
+    expect(result.designRecord.rounds).toHaveLength(1);
     expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
 
     const names = calls.log.map((c) => c.name);
@@ -231,9 +324,10 @@ describe('designPhaseWorkflow', () => {
     );
 
     expect(result.outcome).toBe('completed');
-    expect(result.designRecord?.outcome).toBe('dropped-no-progress');
+    if (result.outcome !== 'completed') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.designRecord.outcome).toBe('dropped-no-progress');
     // Only one review round completed before no-progress was detected.
-    expect(result.designRecord?.iters).toBe(1);
+    expect(result.designRecord.iters).toBe(1);
 
     // 1 planner + 2 reviewers + 1 refiner (no second review round; bailed after no-progress).
     expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });
@@ -278,8 +372,9 @@ describe('designPhaseWorkflow', () => {
     );
 
     expect(result.outcome).toBe('completed');
-    expect(result.designRecord?.outcome).toBe('max-rounds');
-    expect(result.plan?.steps[0].target_files).toEqual([
+    if (result.outcome !== 'completed') throw new Error(`unexpected outcome: ${result.outcome}`);
+    expect(result.designRecord.outcome).toBe('max-rounds');
+    expect(result.plan.steps[0].target_files).toEqual([
       'src/activities/refactor/_internal/types.ts',
     ]);
     expect(result.spawnCounts).toEqual({ planner: 1, 'plan-reviewer': 2, 'plan-refiner': 1 });

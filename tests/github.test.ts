@@ -85,6 +85,9 @@ describe('mapPostMergeStateToOutcome', () => {
 });
 
 describe('pollPostMergeOutcome', () => {
+  const expectedDefaultAttempts = 6;
+  const expectedDefaultPollIntervalMs = 10_000;
+
   it('continues polling while OPEN and stops when MERGED is observed', async () => {
     const poll = makePostMergePoll(['OPEN', 'MERGED']);
 
@@ -167,6 +170,18 @@ describe('pollPostMergeOutcome', () => {
 
     expect(poll.observed()).toBe(1);
     expect(poll.sleeps).toEqual([]);
+  });
+
+  it('uses the existing default post-merge attempts and poll interval', async () => {
+    const poll = makePostMergePoll(['OPEN']);
+
+    await expect(pollPostMergeOutcome({ prNumber: 42 }, poll.deps)).resolves.toBe(
+      'merge-queued',
+    );
+
+    expect(poll.observed()).toBe(expectedDefaultAttempts);
+    expect(poll.sleeps).toHaveLength(expectedDefaultAttempts - 1);
+    expect(poll.sleeps.every((ms) => ms === expectedDefaultPollIntervalMs)).toBe(true);
   });
 });
 

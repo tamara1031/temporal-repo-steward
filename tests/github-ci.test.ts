@@ -350,6 +350,9 @@ describe('evaluateStabilization', () => {
 });
 
 describe('pollCIStatus', () => {
+  const expectedDefaultPollIntervalMs = 30_000;
+  const expectedDefaultMaxWaitMs = 60 * 60 * 1000;
+
   it('waits for a successful rollup to stabilize before returning success', async () => {
     const poll = makeCIPoll([
       { state: 'OPEN', checksJson: rollupJSON([{ name: 'lint', conclusion: 'SUCCESS' }]) },
@@ -494,6 +497,22 @@ describe('pollCIStatus', () => {
 
     expect(poll.observed()).toBe(0);
     expect(poll.sleeps).toEqual([]);
+  });
+
+  it('uses the existing default CI poll interval and max wait', async () => {
+    const poll = makeCIPoll([
+      { state: 'OPEN', checksJson: rollupJSON([{ name: 'test', state: 'PENDING' }]) },
+    ]);
+
+    await expect(pollCIStatus({ prNumber: 42 }, poll.deps)).resolves.toEqual({
+      status: 'timeout',
+      failedRunIds: [],
+      failedJobNames: [],
+    });
+
+    expect(poll.observed()).toBe(expectedDefaultMaxWaitMs / expectedDefaultPollIntervalMs);
+    expect(poll.sleeps).toHaveLength(expectedDefaultMaxWaitMs / expectedDefaultPollIntervalMs);
+    expect(poll.sleeps.every((ms) => ms === expectedDefaultPollIntervalMs)).toBe(true);
   });
 
   it.each([

@@ -18,6 +18,16 @@ interface ReviewSlice {
   suggestions: string[];
 }
 
+interface ReviewSummarySlice extends ReviewSlice {
+  verdict: string;
+}
+
+export interface ReviewSummary<Concern, Verdict extends string> {
+  concern: Concern;
+  verdict: Verdict;
+  bullets: string[];
+}
+
 /**
  * Flatten an array of parallel review results into a feedback string list.
  *
@@ -43,4 +53,24 @@ export function collectFeedback(
     for (const sugg of r.suggestions.slice(0, maxSuggestions)) feedback.push(`[${tag}] ${sugg}`);
   }
   return feedback;
+}
+
+/**
+ * Convert reviewer results into the compact workflow record summary shape.
+ *
+ * This intentionally preserves the old inline mapping behavior:
+ * - reviewer order follows the ordered `reviews` input
+ * - concern labels are zipped by index
+ * - verdict values are copied through unchanged
+ * - bullets are blocking issues followed by suggestions, capped at 3 total
+ */
+export function summarizeReviews<Concern, Review extends ReviewSummarySlice>(
+  reviews: readonly Review[],
+  concerns: readonly Concern[],
+): ReviewSummary<Concern, Review['verdict']>[] {
+  return reviews.map((r, i) => ({
+    concern: concerns[i],
+    verdict: r.verdict,
+    bullets: [...r.blocking_issues, ...r.suggestions].slice(0, 3),
+  }));
 }

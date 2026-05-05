@@ -1,10 +1,6 @@
 import * as fs from 'fs/promises';
-import * as os from 'os';
-import * as path from 'path';
-import { ApplicationFailure } from '@temporalio/activity';
 import { execOrThrow } from '../_internal/exec';
-import { ERR_MISSING_CREDENTIALS } from '../../errors';
-import { fetchRemoteBranchRefSpec, ghAuthEnv, gitCloneUrl } from './_internal/git-env'; // remoteBranchRef unused: we checkout FETCH_HEAD to avoid DWIM shallow-clone edge cases
+import { fetchRemoteBranchRefSpec, prepareGitWorkspace } from './_internal/git-env';
 
 export interface EnsureWorkdirInput {
   workdir: string;
@@ -37,26 +33,10 @@ export async function ensureWorkdirActivity(
     // Directory is gone — fall through to re-clone.
   }
 
-  const root = input.workspaceRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), 'repo-steward-workspaces');
-  await fs.mkdir(root, { recursive: true });
-  const safeName = input.repoFullName.replace('/', '__');
-  const workdir = await fs.mkdtemp(path.join(root, `${safeName}-`));
-
-  const env = ghAuthEnv();
-  await execOrThrow('git', ['clone', '--depth', '50', gitCloneUrl(input.repoFullName), workdir], {
-    env,
+  const { workdir, env } = await prepareGitWorkspace({
+    repoFullName: input.repoFullName,
+    workspaceRoot: input.workspaceRoot,
   });
-
-  const botName = process.env.GIT_BOT_NAME;
-  const botEmail = process.env.GIT_BOT_EMAIL;
-  if (!botName || !botEmail) {
-    throw ApplicationFailure.nonRetryable(
-      'GIT_BOT_NAME and GIT_BOT_EMAIL env vars are required on the worker so auto-generated commits attribute to a known account',
-      ERR_MISSING_CREDENTIALS,
-    );
-  }
-  await execOrThrow('git', ['config', 'user.email', botEmail], { cwd: workdir });
-  await execOrThrow('git', ['config', 'user.name', botName], { cwd: workdir });
 
   // The branch is already pushed to GitHub; fetch the remote tracking ref and
   // checkout a local tracking branch (git DWIM creates the tracking branch

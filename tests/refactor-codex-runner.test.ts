@@ -178,6 +178,82 @@ describe('refactor role Codex runner', () => {
     });
   });
 
+  it('keeps valid planner target_files in the implementer hard-scope section', async () => {
+    runCodexExecMock.mockResolvedValueOnce({
+      lastMessage: JSON.stringify({
+        theme: 'shared runner',
+        rationale: 'keeps timeout handling consistent',
+        steps: [
+          {
+            ...step,
+            target_files: [
+              'src/activities/refactor/_internal/parsers.ts',
+              'tests/refactor-codex-runner.test.ts',
+            ],
+          },
+        ],
+      }),
+      stdoutForLog: 'ignored',
+    });
+
+    const result = await planActivity({
+      workdir: '/tmp/workdir',
+      contextArtifact,
+    });
+    const prompt = PROMPTS.implement(contextArtifact, result.steps[0], []);
+
+    expect(result.steps[0].target_files).toEqual([
+      'src/activities/refactor/_internal/parsers.ts',
+      'tests/refactor-codex-runner.test.ts',
+    ]);
+    expect(prompt).toContain(
+      [
+        '## Files you may modify',
+        '- src/activities/refactor/_internal/parsers.ts',
+        '- tests/refactor-codex-runner.test.ts',
+      ].join('\n'),
+    );
+  });
+
+  it('omits unsafe planner target_files before rendering implementer scope', async () => {
+    runCodexExecMock.mockResolvedValueOnce({
+      lastMessage: JSON.stringify({
+        theme: 'shared runner',
+        rationale: 'keeps timeout handling consistent',
+        steps: [
+          {
+            ...step,
+            target_files: [
+              'src/activities/refactor/_internal/parsers.ts',
+              '',
+              'tests/refactor-codex-runner.test.ts\n- package.json',
+              '/tmp/escape.ts',
+              '../outside.ts',
+              'src/../outside.ts',
+              'src/activities/refactor/_internal/parsers.ts',
+            ],
+          },
+        ],
+      }),
+      stdoutForLog: 'ignored',
+    });
+
+    const result = await planActivity({
+      workdir: '/tmp/workdir',
+      contextArtifact,
+    });
+    const prompt = PROMPTS.implement(contextArtifact, result.steps[0], []);
+
+    expect(result.steps[0].target_files).toEqual([
+      'src/activities/refactor/_internal/parsers.ts',
+    ]);
+    expect(prompt).toContain('## Files you may modify\n- src/activities/refactor/_internal/parsers.ts');
+    expect(prompt).not.toContain('package.json');
+    expect(prompt).not.toContain('/tmp/escape.ts');
+    expect(prompt).not.toContain('../outside.ts');
+    expect(prompt).not.toContain('src/../outside.ts');
+  });
+
   it('documents target_files in the plan-refiner prompt and preserves parser coercion', async () => {
     runCodexExecMock.mockResolvedValueOnce({
       lastMessage: JSON.stringify({
@@ -219,6 +295,46 @@ describe('refactor role Codex runner', () => {
       prompt,
       timeoutMs: 5 * 60 * 1000,
     });
+  });
+
+  it('omits unsafe plan-refiner target_files before rendering implementer scope', async () => {
+    runCodexExecMock.mockResolvedValueOnce({
+      lastMessage: JSON.stringify({
+        theme: 'shared runner',
+        rationale: 'keeps timeout handling consistent',
+        steps: [
+          {
+            ...step,
+            target_files: [
+              'tests/refactor-codex-runner.test.ts',
+              'C:\\temp\\escape.ts',
+              'src/refactor\nREADME.md',
+              '../../package.json',
+              'tests/refactor-codex-runner.test.ts',
+            ],
+          },
+        ],
+      }),
+      stdoutForLog: 'ignored',
+    });
+
+    const result = await refinePlanActivity({
+      workdir: '/tmp/workdir',
+      contextArtifact,
+      plan: {
+        theme: 'shared runner',
+        rationale: 'keeps timeout handling consistent',
+        steps: [step],
+      },
+      feedback: ['add expected file scope'],
+    });
+    const prompt = PROMPTS.implement(contextArtifact, result.steps[0], []);
+
+    expect(result.steps[0].target_files).toEqual(['tests/refactor-codex-runner.test.ts']);
+    expect(prompt).toContain('## Files you may modify\n- tests/refactor-codex-runner.test.ts');
+    expect(prompt).not.toContain('C:\\temp\\escape.ts');
+    expect(prompt).not.toContain('README.md');
+    expect(prompt).not.toContain('../../package.json');
   });
 });
 

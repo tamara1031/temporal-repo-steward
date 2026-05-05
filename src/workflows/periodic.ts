@@ -13,12 +13,10 @@ import { refactorStepWorkflow } from './refactor-step';
 import { designPhaseWorkflow, DEFAULT_DESIGN_PHASE_CONFIG } from './design-phase';
 import type { ContextArtifact } from '../activities/refactor';
 import { AdvisorBudget, type AdvisorAuditEntry } from './_internal/advisor';
-import { renderReport, type StepRecord } from './_internal/refactor-report';
+import { renderReport } from './_internal/refactor-report';
 import { DEFAULT_PERIODIC_SPAWN_CAP, SpawnCounter } from './_internal/spawn-budget';
-import {
-  DEFAULT_STEP_LOOP_CONFIG,
-  type CircuitBreaker,
-} from './_internal/refactor-step-loop';
+import { DEFAULT_STEP_LOOP_CONFIG } from './_internal/refactor-step-loop';
+import type { CircuitBreaker, StepRecord } from './_internal/step-types';
 import { recoverWorkdir } from './_internal/workdir-recovery';
 
 export interface PeriodicRefactorInput {
@@ -51,7 +49,7 @@ export interface PeriodicRefactorOutput {
    * because they happen *after* PR body rendering.
    */
   advisorAudits?: AdvisorAuditEntry[];
-  skipped?: 'no-changes' | 'no-op-plan' | 'plan-failed';
+  skipped?: 'no-changes' | 'no-op-plan' | 'plan-failed' | 'budget-exhausted';
 }
 
 /** Hard cap on plan steps regardless of what the planner returns. */
@@ -130,8 +128,12 @@ export async function periodicRefactorWorkflow(
     });
     spawnCounter.reconcile(designOutput.spawnCounts);
 
-    if (designOutput.outcome === 'plan-failed' || designOutput.outcome === 'budget-exhausted') {
-      log.warn('design phase failed; skipping refactor', { outcome: designOutput.outcome });
+    if (designOutput.outcome === 'budget-exhausted') {
+      log.warn('design spawn budget exhausted; skipping refactor');
+      return { skipped: 'budget-exhausted' };
+    }
+    if (designOutput.outcome === 'plan-failed') {
+      log.warn('design phase failed; skipping refactor');
       return { skipped: 'plan-failed' };
     }
     if (designOutput.outcome === 'no-op') {
@@ -139,7 +141,8 @@ export async function periodicRefactorWorkflow(
       return { skipped: 'no-op-plan' };
     }
 
-    const plan = designOutput.plan!;
+    // designOutput.outcome === 'completed' — TypeScript narrows plan/designRecord as present.
+    const { plan } = designOutput;
     const plannedSteps = plan.steps.slice(0, MAX_STEPS);
     const droppedFromPlan = plan.steps.slice(MAX_STEPS);
 
@@ -231,7 +234,7 @@ export async function periodicRefactorWorkflow(
         circuitBroken = childOutput.circuitBroken;
         break;
       }
-      // kind === 'completed'
+      // kind === 'completed' — record is guaranteed StepRecord by the discriminated union
       // dropped-not-converged / dropped-no-progress / rolled-back-critical-block:
       // the child workflow already rolled back this step's changes via
       // restoreAndPop() before returning, so no workdir cleanup is needed here.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { renderReport, type ReportInput, type StepRecord } from '../src/workflows/_internal/refactor-report';
+import { renderReport, type ReportInput } from '../src/workflows/_internal/refactor-report';
+import type { StepRecord } from '../src/workflows/_internal/step-types';
 import type { PlanOutput, PlanStep } from '../src/activities/refactor';
 
 const step = (title: string): PlanStep => ({

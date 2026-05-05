@@ -4,6 +4,7 @@ import { WorkflowFailedError } from '@temporalio/client';
 import { randomUUID } from 'crypto';
 import { robustPRMergeWorkflow } from '../src/workflows';
 import { pollPostMergeOutcome } from '../src/activities/github/_internal/post-merge-poll';
+import { pollPRState } from '../src/activities/github/_internal/wait-pr-state-poll';
 import { runWorkflowWithMocks, type MockActivityOverrides } from './helpers';
 
 let env: TestWorkflowEnvironment;
@@ -379,6 +380,36 @@ describe('pollPostMergeOutcome lifecycle waits', () => {
   });
 });
 
+describe('pollPRState lifecycle waits', () => {
+  it.each([0, -10])('normalizes %s ms PR-state poll intervals before sleeping', async (pollIntervalMs) => {
+    const poll = makePRStatePoll(['OPEN']);
+
+    await expect(
+      pollPRState(
+        { prNumber: 42, pollIntervalMs, maxWaitMs: 2, targetStates: ['MERGED'] },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ state: 'OPEN', timedOut: true });
+
+    expect(poll.sleeps).toEqual([2]);
+    expect(poll.sleeps.every((ms) => ms > 0)).toBe(true);
+  });
+
+  it('returns timeout with the last observed PR state after the wait budget', async () => {
+    const poll = makePRStatePoll(['OPEN', 'OPEN']);
+
+    await expect(
+      pollPRState(
+        { prNumber: 42, pollIntervalMs: 10, maxWaitMs: 15, targetStates: ['MERGED'] },
+        poll.deps,
+      ),
+    ).resolves.toEqual({ state: 'OPEN', timedOut: true });
+
+    expect(poll.observed()).toBe(2);
+    expect(poll.sleeps).toEqual([10, 5]);
+  });
+});
+
 function makePostMergePoll(states: Array<'OPEN' | 'CLOSED' | 'MERGED'>) {
   let observed = 0;
   let nowMs = 0;
@@ -395,6 +426,29 @@ function makePostMergePoll(states: Array<'OPEN' | 'CLOSED' | 'MERGED'>) {
           state,
           ...(state === 'MERGED' ? { mergedAt: '2026-05-03T00:00:00Z' } : {}),
         };
+      },
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      now: () => nowMs,
+    },
+  };
+}
+
+function makePRStatePoll(states: Array<'OPEN' | 'CLOSED' | 'MERGED'>) {
+  let observed = 0;
+  let nowMs = 0;
+  const sleeps: number[] = [];
+
+  return {
+    sleeps,
+    observed: () => observed,
+    deps: {
+      observe: async () => {
+        const state = states[Math.min(observed, states.length - 1)];
+        observed += 1;
+        return { state };
       },
       sleep: async (ms: number) => {
         sleeps.push(ms);
