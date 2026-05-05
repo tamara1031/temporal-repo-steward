@@ -66,8 +66,27 @@ function normalizeStep(raw: unknown): PlanStep | undefined {
   const description = typeof r.description === 'string' ? r.description : '';
   const reqs = extractStringArray(r.critical_requirements);
   if (!title || !description || reqs.length === 0) return undefined;
-  const target_files = Array.isArray(r.target_files) ? extractStringArray(r.target_files) : undefined;
+  const target_files = Array.isArray(r.target_files) ? normalizeTargetFiles(r.target_files) : undefined;
   return { title, description, critical_requirements: reqs, ...(target_files !== undefined && { target_files }) };
+}
+
+function normalizeTargetFiles(raw: unknown[]): string[] | undefined {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (const value of extractStringArray(raw)) {
+    const file = value.trim();
+    if (!isSafeRepoRelativePath(file) || seen.has(file)) continue;
+    seen.add(file);
+    files.push(file);
+  }
+  return files.length > 0 ? files : undefined;
+}
+
+function isSafeRepoRelativePath(file: string): boolean {
+  if (!file || /[\r\n]/.test(file)) return false;
+  if (file.startsWith('/') || file.startsWith('\\')) return false;
+  if (/^[A-Za-z]:[\\/]/.test(file)) return false;
+  return !file.split(/[\\/]+/).includes('..');
 }
 
 const PLAN_REVIEW_VERDICTS = ['ok', 'needs_revision'] as const;
