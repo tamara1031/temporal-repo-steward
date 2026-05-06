@@ -1,6 +1,7 @@
-# Local dev stack: Temporal dev server + agent worker.
+# Local dev stack: Temporal dev server + repo-steward worker (Go).
 #
 # Usage:
+#   cp .env.example .env   # fill in required vars
 #   docker compose up -d --build
 #   docker compose logs -f worker
 #
@@ -8,8 +9,8 @@
 #   docker compose exec temporal temporal workflow start \
 #       --task-queue repo-steward \
 #       --workflow-id smoke-$(date +%s) \
-#       --type periodicRefactorWorkflow \
-#       --input '{"repoFullName":"<owner>/<repo>","baseBranch":"main"}'
+#       --type PeriodicRefactorWorkflow \
+#       --input '{"RepoFullName":"owner/repo","BaseBranch":"main","Brief":"improve test coverage"}'
 
 services:
   temporal:
@@ -23,8 +24,8 @@ services:
       - --log-level
       - warn
     ports:
-      - "7233:7233"   # frontend gRPC
-      - "8233:8233"   # web UI
+      - "7233:7233"
+      - "8233:8233"
     healthcheck:
       test: ["CMD", "temporal", "operator", "namespace", "list", "--address", "127.0.0.1:7233"]
       interval: 5s
@@ -46,10 +47,13 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
-      TEMPORAL_TASK_QUEUE: repo-steward
       TEMPORAL_TLS: "false"
-      HOME: /home/agent
+      WORKSPACE_ROOT: /workspaces
+      LOG_LEVEL: debug
     volumes:
-      # codex app-server runs inside this container and reads auth.json directly.
+      - workspaces:/workspaces
       - ${HOME}/.codex/auth.json:/home/agent/.codex/auth.json:ro
     restart: unless-stopped
+
+volumes:
+  workspaces:

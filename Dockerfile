@@ -1,17 +1,13 @@
-# syntax=docker/dockerfile:1.6
-#
-# Worker image for the autonomous AI agent platform.
-# Provides: Node 20, gh CLI, OpenAI Codex CLI, git.
-#
-FROM node:20-bookworm-slim AS base
+FROM golang:1.23-bookworm AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /repo-steward ./cmd
 
+FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System packages: git for cloning, curl/ca-certificates for installing gh.
-# We deliberately do NOT install bubblewrap — codex runs with
-# `--sandbox danger-full-access` (see src/activities/_internal/run-codex.ts)
-# so bwrap is never invoked. The Pod itself is the isolation boundary
-# (non-root user, NetworkPolicy egress, emptyDir workspace).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git \
@@ -19,10 +15,8 @@ RUN apt-get update \
       ca-certificates \
       gnupg \
       openssh-client \
-      jq \
  && rm -rf /var/lib/apt/lists/*
 
-# Install GitHub CLI (gh) from the official apt repo.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -32,57 +26,22 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Codex CLI globally.
-RUN npm install -g @openai/codex \
- && npm cache clean --force
+# Install Node + Codex CLI (codex CLI requires Node runtime).
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @openai/codex \
+ && npm cache clean --force \
+ && rm -rf /var/lib/apt/lists/*
 
-# ---- App build stage ----
-FROM base AS build
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
-COPY tsconfig.json ./
-COPY src ./src
-COPY scripts ./scripts
-# `npm run build` runs `tsc` AND emits `dist/workflow-bundle.js` via
-# `scripts/build-workflow-bundle.ts`. The runtime worker reads that bundle
-# instead of bundling at startup (Temporal best practice for production).
-RUN npm run build
-
-# ---- Runtime stage ----
-FROM base AS runtime
-WORKDIR /app
-
-ENV NODE_ENV=production \
-    TEMPORAL_ADDRESS=temporal-frontend.temporal.svc.cluster.local:7233 \
-    TEMPORAL_NAMESPACE=default \
-    TEMPORAL_TASK_QUEUE=repo-steward \
-    HOME=/home/agent \
-    XDG_CACHE_HOME=/tmp
-
-# Match the host UID (1000) so bind-mounted files like ~/.codex/auth.json
-# (mode 600, owned by the host user) remain readable inside the container.
-# The base node image ships a `node` user at UID 1000, which we replace.
-RUN userdel -r node 2>/dev/null || true \
- && useradd -m -u 1000 -d /home/agent agent \
+RUN useradd -m -u 1000 -d /home/agent agent \
  && mkdir -p /home/agent/.codex /workspaces \
  && chown -R agent:agent /home/agent /workspaces
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
-COPY package.json ./
-
-# Codex CLI is invoked once per role from `src/activities/refactor.ts` with
-# inline prompts — there are no codex subagent TOMLs to bake into the image.
-#
-# On startup the worker spawns `codex app-server` as an in-process child and
-# routes all codex calls to it over WebSocket (ws://127.0.0.1:8765).
-# auth.json must be mounted at $HOME/.codex/auth.json in this container.
-# Set CODEX_APP_SERVER_URL to skip the internal spawn and use an external server.
+COPY --from=builder /repo-steward /usr/local/bin/repo-steward
 
 USER agent
-WORKDIR /app
+ENV HOME=/home/agent \
+    XDG_CACHE_HOME=/tmp \
+    WORKSPACE_ROOT=/workspaces
 
-CMD ["node", "dist/worker.js"]
+ENTRYPOINT ["/usr/local/bin/repo-steward"]
