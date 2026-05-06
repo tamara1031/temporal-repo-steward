@@ -40,7 +40,14 @@ export interface StepRecord {
     | 'dropped-not-converged'
     | 'rolled-back-critical-block';
   iters: number;
-  implementReports: string[];
+  /**
+   * The implementer's markdown report from the final iteration, or `undefined`
+   * when the step was rolled back before any implementer ran (budget-halted or
+   * circuit-broken on iter 0).  Only the last iteration's report is kept —
+   * earlier iterations are overwritten — so a `string | undefined` precisely
+   * represents the "at most one" invariant.
+   */
+  lastImplementReport: string | undefined;
   parliamentSummary: ParliamentSummary[];
   driftReverts: string[];
 }

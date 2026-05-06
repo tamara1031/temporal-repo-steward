@@ -51,7 +51,7 @@ export class SpawnCounter {
   private readonly counts: SpawnCounts = {};
   private total = 0;
   constructor(private readonly cap: number) {
-    assertValidCount('cap', cap);
+    assertNonNegativeInt('cap', cap);
   }
   canConsume(n: number): boolean {
     return Number.isInteger(n) && n >= 0 && this.total + n <= this.cap;
@@ -76,7 +76,7 @@ export class SpawnCounter {
       return [role, n] as const;
     });
     const delta = entries.reduce((sum, [role, n]) => {
-      assertValidCount(role, n);
+      assertNonNegativeInt(role, n);
       return sum + n;
     }, 0);
     this.assertCanConsume(delta);
@@ -93,7 +93,7 @@ export class SpawnCounter {
   }
 
   private assertCanConsume(n: number): void {
-    assertValidCount('spawn count', n);
+    assertNonNegativeInt('spawn count', n);
     if (this.total + n > this.cap) {
       throw new RangeError(`spawn budget exceeded: ${this.total + n} > ${this.cap}`);
     }
@@ -106,7 +106,12 @@ function assertSpawnRole(role: string): asserts role is SpawnRole {
   }
 }
 
-function assertValidCount(label: string, n: number): void {
+/**
+ * Shared guard used by both `SpawnCounter` and `AdvisorBudget`. Exported so
+ * any workflow-side bookkeeping class can apply the same validation rule
+ * without duplicating the check or pulling in a third-party library.
+ */
+export function assertNonNegativeInt(label: string, n: number): void {
   if (!Number.isInteger(n) || n < 0) {
     throw new RangeError(`${label} must be a non-negative finite integer`);
   }

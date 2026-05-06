@@ -13,7 +13,7 @@ const record = (s: PlanStep, overrides: Partial<StepRecord> = {}): StepRecord =>
   step: s,
   outcome: 'converged',
   iters: 1,
-  implementReports: ['implemented'],
+  lastImplementReport: 'implemented',
   parliamentSummary: [],
   driftReverts: [],
   ...overrides,

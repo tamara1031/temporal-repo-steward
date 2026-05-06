@@ -24,11 +24,14 @@
 import { log } from '@temporalio/workflow';
 import { advisor as advisorProxy } from '../proxies';
 import type { ConsultAdvisorOutput } from '../../activities';
+import { assertNonNegativeInt } from './spawn-budget';
 
 /** Workflow-local hard cap on advisor consultations. */
 export class AdvisorBudget {
   private consumed = 0;
-  constructor(private readonly cap: number) {}
+  constructor(private readonly cap: number) {
+    assertNonNegativeInt('advisor cap', cap);
+  }
   canConsume(): boolean {
     return this.consumed < this.cap;
   }

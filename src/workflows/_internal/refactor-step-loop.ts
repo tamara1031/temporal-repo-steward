@@ -146,7 +146,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
     step,
     outcome: 'dropped-not-converged',
     iters: 0,
-    implementReports: [],
+    lastImplementReport: undefined,
     parliamentSummary: [],
     driftReverts: [],
   };
@@ -176,12 +176,7 @@ export async function runRefactorStep(input: RunStepInput): Promise<StepLoopResu
       step,
       priorFeedback: accumulatedFeedback,
     });
-    // Overwrite rather than accumulate: the report renderer reads only the
-    // final iter's report, so keeping every iteration's copy would waste
-    // workflow state (up to 16 KiB × maxIter per step). Replacing preserves
-    // the array shape so the renderer contract (`implementReports[length-1]`)
-    // stays valid without changes.
-    record.implementReports = [implResult.report];
+    record.lastImplementReport = implResult.report;
 
     // 2. Diff snapshot — fetch status, diff text, and diff stat in parallel.
     //    All three are independent reads of the workdir at the same point in

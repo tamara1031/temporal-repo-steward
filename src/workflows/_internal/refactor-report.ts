@@ -99,10 +99,10 @@ export function renderReport(r: ReportInput): string {
     lines.push(`### Step: ${rec.step.title} — ${rec.outcome} (${rec.iters} iter)`);
     lines.push(rec.step.description);
     lines.push('');
-    if (rec.implementReports.length > 0) {
+    if (rec.lastImplementReport !== undefined) {
       lines.push('**Implementer report (final iter):**');
       lines.push('');
-      lines.push(rec.implementReports[rec.implementReports.length - 1]);
+      lines.push(rec.lastImplementReport);
       lines.push('');
     }
     if (rec.parliamentSummary.length > 0) {
