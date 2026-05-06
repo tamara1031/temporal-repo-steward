@@ -240,13 +240,14 @@ describe('periodicRefactorWorkflow', () => {
           }
           return { verdict: 'ok' as const, blocking_issues: [], suggestions: [] };
         },
-        // Vary diff text per call so iter 1's no-progress check sees real
-        // progress and proceeds to Parliament again.
+        // Vary diff text and hash per call so iter 1's no-progress check sees
+        // real progress and proceeds to Parliament again.
         diffTextActivity: async () => {
           diffCalls += 1;
           return {
             text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
             truncated: false,
+            contentHash: `stub-hash-${diffCalls}`,
           };
         },
         // Advisor downgrades critical_block to needs_revision.
@@ -295,6 +296,7 @@ describe('periodicRefactorWorkflow', () => {
           return {
             text: `diff --git a/src/foo${diffCalls}.ts b/src/foo${diffCalls}.ts\n@@ stub diff @@`,
             truncated: false,
+            contentHash: `stub-hash-${diffCalls}`,
           };
         },
         consultAdvisorActivity: async () => ({
