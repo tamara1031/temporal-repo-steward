@@ -1,16 +1,16 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tamara1031/temporal-repo-steward/internal/gitutil"
 )
 
 const defaultSessionTTL = 24 * time.Hour
@@ -108,7 +108,11 @@ func (m *Manager) Remove(sessionID string) {
 }
 
 // CleanupOld removes sessions not accessed within maxAge.
+// If maxAge is zero, defaultSessionTTL is used.
 func (m *Manager) CleanupOld(maxAge time.Duration) {
+	if maxAge == 0 {
+		maxAge = defaultSessionTTL
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cutoff := time.Now().Add(-maxAge)
@@ -128,25 +132,14 @@ func (m *Manager) clone(ctx context.Context, repoFullName, baseBranch, branch, w
 		return err
 	}
 	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", m.githubToken, repoFullName)
-	if err := gitRun(ctx, workDir, "git", "clone", "--branch="+baseBranch, cloneURL, "."); err != nil {
+	if err := gitutil.Run(ctx, workDir, "clone", "--branch="+baseBranch, cloneURL, "."); err != nil {
 		return err
 	}
-	if err := gitRun(ctx, workDir, "git", "config", "user.name", m.botName); err != nil {
+	if err := gitutil.Run(ctx, workDir, "config", "user.name", m.botName); err != nil {
 		return err
 	}
-	if err := gitRun(ctx, workDir, "git", "config", "user.email", m.botEmail); err != nil {
+	if err := gitutil.Run(ctx, workDir, "config", "user.email", m.botEmail); err != nil {
 		return err
 	}
-	return gitRun(ctx, workDir, "git", "checkout", "-b", branch)
-}
-
-func gitRun(ctx context.Context, dir string, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s %v: %w\n%s", name, args, err, errBuf.String())
-	}
-	return nil
+	return gitutil.Run(ctx, workDir, "checkout", "-b", branch)
 }
