@@ -106,7 +106,9 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 		).Get(ctx, &refineResult); err != nil {
 			break
 		}
-		plan.Theme = refineResult.Response
+		if refined, ok := codexact.ParsePlan(refineResult.Response); ok {
+			plan = refined
+		}
 	}
 
 	return DesignPhaseResult{

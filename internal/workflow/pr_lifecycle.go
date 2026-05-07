@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
@@ -14,7 +13,7 @@ import (
 )
 
 const (
-	maxFixIterations     = 8
+	maxFixIterations      = 8
 	postMergePollAttempts = 6
 )
 
@@ -150,7 +149,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			if iteration == maxFixIterations-1 {
 				return result, rserrors.NewMaxIterations()
 			}
-			slog.Info("CI failed, attempting self-heal", "iteration", iteration)
+			workflow.GetLogger(ctx).Info("CI failed, attempting self-heal", "iteration", iteration)
 
 			var failLogs string
 			_ = workflow.ExecuteActivity(
