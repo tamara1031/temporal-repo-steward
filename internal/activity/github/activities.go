@@ -74,6 +74,7 @@ const (
 	CIOutcomeFailure          CIOutcome = "failure"
 	CIOutcomeExternallyMerged CIOutcome = "externally_merged"
 	CIOutcomeExternallyClosed CIOutcome = "externally_closed"
+	CIOutcomeMergeQueued      CIOutcome = "merge-queued"
 )
 
 // WaitForCIResult is the output of WaitForCIActivity.
@@ -253,7 +254,7 @@ func (a *Activities) ObservePRStateActivity(ctx context.Context, in ObservePRSta
 		}
 		sleep(ctx, interval)
 	}
-	return "merge-queued", nil
+	return CIOutcomeMergeQueued, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
