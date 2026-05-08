@@ -2,11 +2,9 @@ package workflow
 
 import (
 	"fmt"
-	"time"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
 	rserrors "github.com/tamara1031/temporal-repo-steward/internal/errors"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -27,31 +25,12 @@ type RefactorStepResult struct {
 
 // RefactorStepWorkflow implements a single refactoring step with iterative review.
 func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorStepResult, error) {
-	codexOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 35 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts:    5,
-			InitialInterval:    30 * time.Second,
-			BackoffCoefficient: 3,
-			MaximumInterval:    10 * time.Minute,
-		},
-	}
-	reviewOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts:    5,
-			InitialInterval:    30 * time.Second,
-			BackoffCoefficient: 3,
-			MaximumInterval:    10 * time.Minute,
-		},
-	}
-
 	var acts *codexact.Activities
 
 	for iter := 0; iter < maxStepIter; iter++ {
 		var implResult codexact.ImplementResult
 		if err := workflow.ExecuteActivity(
-			workflow.WithActivityOptions(ctx, codexOpts),
+			workflow.WithActivityOptions(ctx, longCodexActOpts()),
 			acts.ImplementActivity,
 			codexact.ImplementInput{
 				SessionID:       in.SessionID,
@@ -70,7 +49,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 		for _, concern := range []string{"correctness", "quality"} {
 			var reviewResult codexact.ReviewResult
 			if err := workflow.ExecuteActivity(
-				workflow.WithActivityOptions(ctx, reviewOpts),
+				workflow.WithActivityOptions(ctx, shortActOpts()),
 				acts.ReviewActivity,
 				codexact.ReviewInput{
 					SessionID:       in.SessionID,
@@ -86,7 +65,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 					advisorSummary := fmt.Sprintf("Step: %s\nConcern: %s\nFeedback: %s", in.Step.Title, concern, reviewResult.Feedback)
 					var verdict codexact.AdvisorVerdict
 					if err := workflow.ExecuteActivity(
-						workflow.WithActivityOptions(ctx, reviewOpts),
+						workflow.WithActivityOptions(ctx, shortActOpts()),
 						acts.ConsultAdvisorActivity,
 						advisorSummary,
 					).Get(ctx, &verdict); err == nil && verdict.Verdict == "abort" {
