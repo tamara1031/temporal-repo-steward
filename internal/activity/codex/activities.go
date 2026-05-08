@@ -1,17 +1,16 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/tamara1031/temporal-repo-steward/internal/codex"
+	"github.com/tamara1031/temporal-repo-steward/internal/gitutil"
 	"github.com/tamara1031/temporal-repo-steward/internal/workspace"
 	"go.temporal.io/sdk/activity"
 )
@@ -180,26 +179,26 @@ func (a *Activities) ImplementActivity(ctx context.Context, in ImplementInput) (
 		optContext(ctxText),
 	)
 
-	shaBefore, _ := gitOutput(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
+	shaBefore, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 
 	if _, err := a.cx.Run(ctx, codex.RunOptions{WorkDir: s.WorkDir, Prompt: prompt}); err != nil {
 		return ImplementResult{}, fmt.Errorf("codex: %w", err)
 	}
 
-	shaAfter, _ := gitOutput(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
+	shaAfter, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 	commitSHA := strings.TrimSpace(shaAfter)
 	hasChanges := strings.TrimSpace(shaBefore) != commitSHA
 
 	var diffStat string
 	if hasChanges {
-		diffStat, _ = gitOutput(ctx, s.WorkDir, "git", "diff", "--stat", "HEAD~1", "HEAD")
+		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "--stat", "HEAD~1", "HEAD")
 	} else {
-		_ = gitRun(ctx, s.WorkDir, "git", "add", "-A")
-		diffStat, _ = gitOutput(ctx, s.WorkDir, "git", "diff", "--cached", "--stat")
+		_ = gitutil.Run(ctx, s.WorkDir, "git", "add", "-A")
+		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "--cached", "--stat")
 		hasChanges = strings.TrimSpace(diffStat) != ""
 		if hasChanges {
-			_ = gitRun(ctx, s.WorkDir, "git", "commit", "-m", fmt.Sprintf("refactor: %s", in.Step.Title))
-			sha, _ := gitOutput(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
+			_ = gitutil.Run(ctx, s.WorkDir, "git", "commit", "-m", fmt.Sprintf("refactor: %s", in.Step.Title))
+			sha, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 			commitSHA = strings.TrimSpace(sha)
 		}
 	}
@@ -224,7 +223,7 @@ func (a *Activities) ReviewActivity(ctx context.Context, in ReviewInput) (Review
 
 	diff := in.Diff
 	if diff == "" {
-		diff, _ = gitOutput(ctx, s.WorkDir, "git", "diff", "HEAD~1", "HEAD")
+		diff, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "HEAD~1", "HEAD")
 	}
 
 	ctxText := ""
@@ -236,7 +235,7 @@ func (a *Activities) ReviewActivity(ctx context.Context, in ReviewInput) (Review
 	prompt := fmt.Sprintf(
 		"Review the following code change for %s concerns.\n\n"+
 			"Respond with JSON only:\n"+
-			`{"verdict":"ok|suggest|critical_block","feedback":"<explanation>","suggestions":["<suggestion>",...]}`+"\n\n"+
+			`{"verdict":"ok|suggest|critical_block","feedback":"<explanation>","suggestions":["<suggestion>",...]}` + "\n\n"+
 			"Diff:\n%s\n\n%s",
 		in.Concern,
 		diff,
@@ -306,7 +305,7 @@ func (a *Activities) ConsultAdvisorActivity(ctx context.Context, summary string)
 	return verdict, nil
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────────────────────────────
 
 func newSessionID() string {
 	return fmt.Sprintf("sess-%d", time.Now().UnixNano())
@@ -326,25 +325,4 @@ func extractJSON(raw string, v any) error {
 		return fmt.Errorf("no JSON object found")
 	}
 	return json.Unmarshal([]byte(raw[start:end+1]), v)
-}
-
-func gitRun(ctx context.Context, dir string, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s %v: %w\n%s", name, args, err, errBuf.String())
-	}
-	return nil
-}
-
-func gitOutput(ctx context.Context, dir string, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }
