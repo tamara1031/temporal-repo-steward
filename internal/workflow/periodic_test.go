@@ -165,3 +165,129 @@ func (s *periodicSuite) Test_StepsCapAtMaxStepsPerRun() {
 	// maxStepsPerRun=2: regardless of the 4-step plan, only 2 execute.
 	s.Equal(2, result.StepsDone)
 }
+
+// Test_QueryProgress_DesignSkip verifies that after a design-skip, the progress
+// query reflects the skipped state and PhaseDone.
+func (s *periodicSuite) Test_QueryProgress_DesignSkip() {
+	env := s.NewTestWorkflowEnvironment()
+
+	env.OnWorkflow(workflow.DesignPhaseWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.DesignPhaseResult{
+			SessionID:  "test-session-00000001",
+			Skipped:    true,
+			SkipReason: "planner returned no steps",
+		}, nil)
+
+	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
+		RepoFullName: "owner/repo",
+		BaseBranch:   "main",
+		Brief:        "test",
+		PRTitle:      "chore: test",
+		PRBody:       "body",
+	})
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	encoded, err := env.QueryWorkflow(workflow.QueryProgress)
+	s.NoError(err)
+	var progress workflow.RefactorProgress
+	s.NoError(encoded.Get(&progress))
+
+	s.Equal(workflow.PhaseDone, progress.Phase)
+	s.True(progress.Skipped)
+	s.Equal("planner returned no steps", progress.SkipReason)
+	s.Equal(0, progress.StepsDone)
+}
+
+// Test_QueryProgress_HappyPath verifies that after a full cycle, the progress
+// query reflects the correct step count, PR info, and PhaseDone.
+func (s *periodicSuite) Test_QueryProgress_HappyPath() {
+	env := s.NewTestWorkflowEnvironment()
+
+	env.OnWorkflow(workflow.DesignPhaseWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.DesignPhaseResult{
+			SessionID: "test-session-00000001",
+			Plan: codexact.Plan{
+				Theme: "refactor theme",
+				Steps: []codexact.Step{{Title: "step1"}, {Title: "step2"}},
+			},
+			WorkDir: "/tmp/ws",
+			Branch:  "codex-session/test",
+		}, nil)
+
+	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.RefactorStepResult{Kind: "completed", CommitSHA: "sha1"}, nil)
+
+	env.OnWorkflow(workflow.RobustPRMergeWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.RobustPRMergeResult{
+			PRNumber: 42,
+			PRURL:    "https://github.com/owner/repo/pull/42",
+			Outcome:  "merged",
+		}, nil)
+
+	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
+		RepoFullName: "owner/repo",
+		BaseBranch:   "main",
+		Brief:        "test",
+		PRTitle:      "chore: test",
+		PRBody:       "body",
+		AutoMerge:    true,
+	})
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	encoded, err := env.QueryWorkflow(workflow.QueryProgress)
+	s.NoError(err)
+	var progress workflow.RefactorProgress
+	s.NoError(encoded.Get(&progress))
+
+	s.Equal(workflow.PhaseDone, progress.Phase)
+	s.False(progress.Skipped)
+	s.Equal(2, progress.StepsDone)
+	s.Equal(2, progress.TotalSteps)
+	s.Equal(42, progress.PRNumber)
+	s.Equal("https://github.com/owner/repo/pull/42", progress.PRURL)
+}
+
+// Test_QueryProgress_AllStepsFail verifies that when all steps fail, progress
+// reflects the skipped state with the correct reason.
+func (s *periodicSuite) Test_QueryProgress_AllStepsFail() {
+	env := s.NewTestWorkflowEnvironment()
+
+	env.OnWorkflow(workflow.DesignPhaseWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.DesignPhaseResult{
+			SessionID: "test-session-00000001",
+			Plan: codexact.Plan{
+				Theme: "refactor theme",
+				Steps: []codexact.Step{{Title: "step1"}},
+			},
+			WorkDir: "/tmp/ws",
+			Branch:  "codex-session/test",
+		}, nil)
+
+	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
+		Return(workflow.RefactorStepResult{Kind: "circuit-broken"}, testErr("implement produced no changes"))
+
+	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
+		RepoFullName: "owner/repo",
+		BaseBranch:   "main",
+		Brief:        "test",
+		PRTitle:      "chore: test",
+		PRBody:       "body",
+	})
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	encoded, err := env.QueryWorkflow(workflow.QueryProgress)
+	s.NoError(err)
+	var progress workflow.RefactorProgress
+	s.NoError(encoded.Get(&progress))
+
+	s.Equal(workflow.PhaseDone, progress.Phase)
+	s.True(progress.Skipped)
+	s.Equal("no steps completed successfully", progress.SkipReason)
+	s.Equal(0, progress.StepsDone)
+}

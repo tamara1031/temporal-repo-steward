@@ -161,3 +161,78 @@ func (s *prLifecycleSuite) Test_SelfHeal_OneCIFailureThenSuccess() {
 	s.Equal("auto-merge-disabled", result.Outcome)
 	s.Equal(42, result.PRNumber)
 }
+
+// Test_QueryCIProgress_PRCreated verifies that after a clean CI pass, the
+// ci_progress query exposes the PR number, URL, and last CI outcome.
+func (s *prLifecycleSuite) Test_QueryCIProgress_PRCreated() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeSuccess}, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	encoded, err := env.QueryWorkflow(workflow.QueryCIProgress)
+	s.NoError(err)
+	var progress workflow.CIProgress
+	s.NoError(encoded.Get(&progress))
+
+	s.Equal(42, progress.PRNumber)
+	s.Equal("https://github.com/owner/repo/pull/42", progress.PRURL)
+	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
+	s.Equal(maxFixIterations, progress.MaxIterations)
+}
+
+// Test_QueryCIProgress_SelfHealIteration verifies that after one CI failure and
+// a successful fix, the ci_progress query reflects the correct iteration count
+// and the final CI outcome.
+func (s *prLifecycleSuite) Test_QueryCIProgress_SelfHealIteration() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	var gitActs *gitact.Activities
+	var codexActs *codexact.Activities
+	s.setupPushAndCreate(env)
+
+	// First CI: failure.
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeFailure}, nil).Once()
+
+	env.OnActivity(ghActs.FetchFailedRunLogsActivity, mock.Anything, mock.Anything).
+		Return("error: undefined: Foo\n", nil)
+
+	env.OnActivity(codexActs.ChatActivity, mock.Anything, mock.Anything).
+		Return(codexact.ChatResult{SessionID: "test-session-00000001", Response: "fixed"}, nil)
+
+	env.OnActivity(gitActs.CommitAllActivity, mock.Anything, mock.Anything).
+		Return("fixsha", nil)
+
+	env.OnActivity(gitActs.PushBranchActivity, mock.Anything, mock.Anything).Return(nil)
+
+	// Second CI: success.
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeSuccess}, nil).Once()
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+
+	encoded, err := env.QueryWorkflow(workflow.QueryCIProgress)
+	s.NoError(err)
+	var progress workflow.CIProgress
+	s.NoError(encoded.Get(&progress))
+
+	s.Equal(42, progress.PRNumber)
+	// Iteration 1 (0-indexed) is where success was observed.
+	s.Equal(1, progress.Iteration)
+	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
+}
+
+// maxFixIterations is re-exported via the test package for assertion purposes.
+// Keep in sync with the unexported constant in pr_lifecycle.go.
+const maxFixIterations = 8
