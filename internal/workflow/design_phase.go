@@ -88,13 +88,23 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 			acts.ChatActivity,
 			codexact.ChatInput{
 				SessionID: sessionID,
-				Message:   fmt.Sprintf("Refine the plan based on this feedback: %s", reviewResult.Feedback),
-				Context:   contextArtifact,
+				Message: fmt.Sprintf(
+					"Refine the plan based on this feedback: %s\n\n"+
+						"Respond with JSON only matching this exact shape:\n"+
+						`{"theme":"<one-line summary>","steps":[{"title":"<title>","description":"<what to do>"},...]}`,
+					reviewResult.Feedback,
+				),
+				Context: contextArtifact,
 			},
 		).Get(ctx, &refineResult); err != nil {
 			break
 		}
-		plan.Theme = refineResult.Response
+		var refined codexact.Plan
+		if codexact.ExtractJSON(refineResult.Response, &refined) == nil && len(refined.Steps) > 0 {
+			plan = refined
+		} else if refined.Theme != "" {
+			plan.Theme = refined.Theme
+		}
 	}
 
 	return DesignPhaseResult{

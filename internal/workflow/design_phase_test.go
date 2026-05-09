@@ -104,7 +104,10 @@ func (s *designPhaseSuite) Test_CriticalBlock_Skips() {
 	s.Contains(result.SkipReason, "this is dangerous")
 }
 
-func (s *designPhaseSuite) Test_RefinesOnSuggest_ThenOK() {
+// Test_RefinesOnSuggest_UpdatesPlan verifies that a "suggest" review verdict
+// triggers a refinement chat; when the response is valid JSON the full Plan
+// (Theme and Steps) is replaced with the refined version.
+func (s *designPhaseSuite) Test_RefinesOnSuggest_UpdatesPlan() {
 	env := s.NewTestWorkflowEnvironment()
 	var acts *codexact.Activities
 
@@ -117,8 +120,12 @@ func (s *designPhaseSuite) Test_RefinesOnSuggest_ThenOK() {
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
 		Return(codexact.ReviewResult{Verdict: "suggest", Feedback: "improve x"}, nil).Once()
 
+	// Refinement returns a valid JSON plan with an updated theme and a new step list.
 	env.OnActivity(acts.ChatActivity, mock.Anything, mock.Anything).
-		Return(codexact.ChatResult{SessionID: "test-session-00000001", Response: "refined theme"}, nil)
+		Return(codexact.ChatResult{
+			SessionID: "test-session-00000001",
+			Response:  `{"theme":"refined theme","steps":[{"title":"step-a","description":"do a"},{"title":"step-b","description":"do b"}]}`,
+		}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
 		Return(codexact.ReviewResult{Verdict: "ok"}, nil).Once()
@@ -133,6 +140,49 @@ func (s *designPhaseSuite) Test_RefinesOnSuggest_ThenOK() {
 	s.NoError(env.GetWorkflowResult(&result))
 	s.False(result.Skipped)
 	s.Equal("refined theme", result.Plan.Theme)
+	// Steps must be updated from the refined plan, not kept from the original.
+	s.Len(result.Plan.Steps, 2)
+	s.Equal("step-a", result.Plan.Steps[0].Title)
+}
+
+// Test_RefinesOnSuggest_FallbackThemeOnly verifies that when the refinement chat
+// returns partial JSON (theme only, no steps), only the Theme is updated.
+func (s *designPhaseSuite) Test_RefinesOnSuggest_FallbackThemeOnly() {
+	env := s.NewTestWorkflowEnvironment()
+	var acts *codexact.Activities
+
+	env.OnActivity(acts.DesignActivity, mock.Anything, mock.Anything).
+		Return(codexact.DesignResult{
+			SessionID: "test-session-00000001",
+			Plan:      codexact.Plan{Theme: "original theme", Steps: []codexact.Step{{Title: "step1"}}},
+		}, nil)
+
+	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
+		Return(codexact.ReviewResult{Verdict: "suggest", Feedback: "improve x"}, nil).Once()
+
+	// JSON has a theme but no steps — falls back to theme-only update.
+	env.OnActivity(acts.ChatActivity, mock.Anything, mock.Anything).
+		Return(codexact.ChatResult{
+			SessionID: "test-session-00000001",
+			Response:  `{"theme":"better theme","steps":[]}`,
+		}, nil)
+
+	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
+		Return(codexact.ReviewResult{Verdict: "ok"}, nil).Once()
+
+	env.ExecuteWorkflow(workflow.DesignPhaseWorkflow, workflow.DesignPhaseInput{
+		Repo: "owner/repo", BaseBranch: "main", Brief: "test",
+	})
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.DesignPhaseResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.False(result.Skipped)
+	s.Equal("better theme", result.Plan.Theme)
+	// Original steps are preserved when the refined response has no steps.
+	s.Len(result.Plan.Steps, 1)
+	s.Equal("step1", result.Plan.Steps[0].Title)
 }
 
 func (s *designPhaseSuite) Test_PropagatesDesignActivityError() {
