@@ -145,19 +145,41 @@ func (a *Activities) WaitForCIActivity(ctx context.Context, in WaitForCIInput) (
 		if anyFailed {
 			return WaitForCIResult{Outcome: CIOutcomeFailure, FailedRuns: failedRuns}, nil
 		}
-		sleep(ctx, 60*time.Second)
 		return WaitForCIResult{Outcome: CIOutcomeSuccess}, nil
 	}
 }
 
 // FetchFailedRunLogsInput is the input to FetchFailedRunLogsActivity.
 type FetchFailedRunLogsInput struct {
-	WorkDir  string
-	PRNumber int
+	WorkDir       string
+	PRNumber      int
+	FailedRunURLs []string // preferred: targeted run detail-URLs from WaitForCIResult.FailedRuns
 }
 
-// FetchFailedRunLogsActivity fetches log output for the most recent failed CI runs.
+// FetchFailedRunLogsActivity fetches log output for failed CI runs.
+// When FailedRunURLs is populated it fetches only those specific runs (targeted);
+// otherwise it falls back to scanning the most recent 5 runs for failures.
 func (a *Activities) FetchFailedRunLogsActivity(ctx context.Context, in FetchFailedRunLogsInput) (string, error) {
+	var logs strings.Builder
+
+	if len(in.FailedRunURLs) > 0 {
+		for _, u := range in.FailedRunURLs {
+			runID := runIDFromURL(u)
+			if runID == "" {
+				continue
+			}
+			activity.RecordHeartbeat(ctx, fmt.Sprintf("fetching logs for run %s", runID))
+			runLog, err := ghOutput(ctx, in.WorkDir, "run", "view", runID, "--log-failed")
+			if err != nil {
+				slog.Warn("failed to fetch run logs", "runID", runID, "error", err)
+				continue
+			}
+			logs.WriteString(fmt.Sprintf("=== Run %s ===\n%s\n", runID, runLog))
+		}
+		return logs.String(), nil
+	}
+
+	// Fallback: list the most recent runs and pick the failed ones.
 	out, err := ghOutput(ctx, in.WorkDir, "run", "list",
 		"--json", "databaseId,conclusion,status",
 		"--limit", "5",
@@ -175,7 +197,6 @@ func (a *Activities) FetchFailedRunLogsActivity(ctx context.Context, in FetchFai
 		return "", err
 	}
 
-	var logs strings.Builder
 	for _, r := range runs {
 		if r.Status == "completed" && (r.Conclusion == "failure" || r.Conclusion == "timed_out") {
 			activity.RecordHeartbeat(ctx, fmt.Sprintf("fetching logs for run %d", r.ID))
@@ -189,6 +210,22 @@ func (a *Activities) FetchFailedRunLogsActivity(ctx context.Context, in FetchFai
 		}
 	}
 	return logs.String(), nil
+}
+
+// runIDFromURL extracts the numeric run ID from a GitHub Actions detail URL.
+// Handles forms like: https://github.com/owner/repo/actions/runs/1234567890[/jobs/...]
+func runIDFromURL(u string) string {
+	const marker = "/runs/"
+	idx := strings.LastIndex(u, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := u[idx+len(marker):]
+	// Trim any trailing path segments (e.g. "/jobs/456")
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		rest = rest[:slash]
+	}
+	return rest
 }
 
 // MergePRInput is the input to MergePRActivity.

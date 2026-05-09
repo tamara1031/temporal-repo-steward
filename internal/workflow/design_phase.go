@@ -110,6 +110,8 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 		}
 		if refined := parsePlan(refineResult.Response); len(refined.Steps) > 0 {
 			plan = refined
+		} else if refined.Theme != "" {
+			plan.Theme = refined.Theme
 		}
 	}
 

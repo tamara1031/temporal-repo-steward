@@ -184,7 +184,11 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			_ = workflow.ExecuteActivity(
 				workflow.WithActivityOptions(ctx, cheapOpts),
 				ghActs.FetchFailedRunLogsActivity,
-				ghact.FetchFailedRunLogsInput{WorkDir: in.WorkDir, PRNumber: prResult.Number},
+				ghact.FetchFailedRunLogsInput{
+					WorkDir:       in.WorkDir,
+					PRNumber:      prResult.Number,
+					FailedRunURLs: ciResult.FailedRuns, // use the specific runs already identified
+				},
 			).Get(ctx, &failLogs)
 
 			var fixResult codexact.ChatResult
