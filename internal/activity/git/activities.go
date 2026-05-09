@@ -33,18 +33,18 @@ func (a *Activities) CloneRepoActivity(ctx context.Context, in CloneInput) error
 	}
 
 	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", a.Token, in.RepoFullName)
-	if err := gitutil.Run(ctx, in.WorkDir, "clone", "--branch="+in.BaseBranch, cloneURL, "."); err != nil {
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "clone", "--branch="+in.BaseBranch, cloneURL, "."); err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
 	activity.RecordHeartbeat(ctx, "cloned")
 
-	if err := gitutil.Run(ctx, in.WorkDir, "config", "user.name", a.BotName); err != nil {
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "config", "user.name", a.BotName); err != nil {
 		return err
 	}
-	if err := gitutil.Run(ctx, in.WorkDir, "config", "user.email", a.BotEmail); err != nil {
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "config", "user.email", a.BotEmail); err != nil {
 		return err
 	}
-	return gitutil.Run(ctx, in.WorkDir, "checkout", "-b", in.Branch)
+	return gitutil.Run(ctx, in.WorkDir, "git", "checkout", "-b", in.Branch)
 }
 
 // CommitAllInput is the input to CommitAllActivity.
@@ -56,11 +56,11 @@ type CommitAllInput struct {
 // CommitAllActivity stages all changes and creates a commit.
 // Returns the commit SHA, or an error if there is nothing to commit.
 func (a *Activities) CommitAllActivity(ctx context.Context, in CommitAllInput) (string, error) {
-	if err := gitutil.Run(ctx, in.WorkDir, "add", "-A"); err != nil {
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "add", "-A"); err != nil {
 		return "", err
 	}
 
-	out, err := gitutil.Output(ctx, in.WorkDir, "status", "--porcelain")
+	out, err := gitutil.Output(ctx, in.WorkDir, "git", "status", "--porcelain")
 	if err != nil {
 		return "", err
 	}
@@ -68,11 +68,11 @@ func (a *Activities) CommitAllActivity(ctx context.Context, in CommitAllInput) (
 		return "", fmt.Errorf("no changes to commit")
 	}
 
-	if err := gitutil.Run(ctx, in.WorkDir, "commit", "-m", in.Message); err != nil {
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "commit", "-m", in.Message); err != nil {
 		return "", fmt.Errorf("commit: %w", err)
 	}
 
-	sha, err := gitutil.Output(ctx, in.WorkDir, "rev-parse", "HEAD")
+	sha, err := gitutil.Output(ctx, in.WorkDir, "git", "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -93,25 +93,25 @@ func (a *Activities) PushBranchActivity(ctx context.Context, in PushInput) error
 	if in.Force {
 		args = []string{"push", "--force-with-lease", "origin", in.Branch}
 	}
-	return gitutil.Run(ctx, in.WorkDir, args...)
+	return gitutil.Run(ctx, in.WorkDir, "git", args...)
 }
 
 // StatusPorcelainActivity returns the porcelain status of the working tree.
 func (a *Activities) StatusPorcelainActivity(ctx context.Context, workDir string) (string, error) {
-	return gitutil.Output(ctx, workDir, "status", "--porcelain")
+	return gitutil.Output(ctx, workDir, "git", "status", "--porcelain")
 }
 
 // DiffStatActivity returns a short diff stat of staged changes vs HEAD.
 func (a *Activities) DiffStatActivity(ctx context.Context, workDir string) (string, error) {
-	return gitutil.Output(ctx, workDir, "diff", "--stat", "HEAD")
+	return gitutil.Output(ctx, workDir, "git", "diff", "--stat", "HEAD")
 }
 
 // RestoreActivity discards all uncommitted changes.
 func (a *Activities) RestoreActivity(ctx context.Context, workDir string) error {
-	if err := gitutil.Run(ctx, workDir, "restore", "."); err != nil {
+	if err := gitutil.Run(ctx, workDir, "git", "restore", "."); err != nil {
 		return err
 	}
-	return gitutil.Run(ctx, workDir, "clean", "-fd")
+	return gitutil.Run(ctx, workDir, "git", "clean", "-fd")
 }
 
 // CleanupWorkspaceActivity removes the workspace directory.
@@ -127,12 +127,12 @@ type CheckConflictInput struct {
 
 // CheckConflictActivity returns true if merging base into HEAD would cause a conflict.
 func (a *Activities) CheckConflictActivity(ctx context.Context, in CheckConflictInput) (bool, error) {
-	err := gitutil.Run(ctx, in.WorkDir, "merge", "--no-commit", "--no-ff", "origin/"+in.BaseBranch)
+	err := gitutil.Run(ctx, in.WorkDir, "git", "merge", "--no-commit", "--no-ff", "origin/"+in.BaseBranch)
 	if err != nil {
-		_ = gitutil.Run(ctx, in.WorkDir, "merge", "--abort")
+		_ = gitutil.Run(ctx, in.WorkDir, "git", "merge", "--abort")
 		return true, nil
 	}
-	_ = gitutil.Run(ctx, in.WorkDir, "merge", "--abort")
+	_ = gitutil.Run(ctx, in.WorkDir, "git", "merge", "--abort")
 	return false, nil
 }
 

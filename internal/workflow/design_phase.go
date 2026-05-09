@@ -1,11 +1,11 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
-	"time"
+	"strings"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -32,21 +32,11 @@ type DesignPhaseResult struct {
 
 // DesignPhaseWorkflow generates a refactoring plan and refines it through review rounds.
 func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhaseResult, error) {
-	opts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts:    5,
-			InitialInterval:    30 * time.Second,
-			BackoffCoefficient: 3,
-			MaximumInterval:    10 * time.Minute,
-		},
-	}
-
 	var acts *codexact.Activities
 
 	var designResult codexact.DesignResult
 	if err := workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, opts),
+		workflow.WithActivityOptions(ctx, shortActOpts()),
 		acts.DesignActivity,
 		codexact.DesignInput{
 			SessionID:  in.SessionID,
@@ -73,7 +63,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 	for round := 0; round < maxDesignRounds; round++ {
 		var reviewResult codexact.ReviewResult
 		if err := workflow.ExecuteActivity(
-			workflow.WithActivityOptions(ctx, opts),
+			workflow.WithActivityOptions(ctx, shortActOpts()),
 			acts.ReviewActivity,
 			codexact.ReviewInput{
 				SessionID:       sessionID,
@@ -96,24 +86,20 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 
 		var refineResult codexact.ChatResult
 		if err := workflow.ExecuteActivity(
-			workflow.WithActivityOptions(ctx, opts),
+			workflow.WithActivityOptions(ctx, shortActOpts()),
 			acts.ChatActivity,
 			codexact.ChatInput{
-				SessionID: sessionID,
-				Message: fmt.Sprintf(
-					"Refine the plan based on this feedback: %s\n\n"+
-						"Respond with JSON only, in this exact shape:\n"+
-						`{"theme":"<one-line summary>","steps":[{"title":"<step title>","description":"<what to do>"},...]}`,
-					reviewResult.Feedback,
-				),
-				Context: contextArtifact,
+				SessionID:       sessionID,
+				Message:         fmt.Sprintf("Refine the plan based on this feedback: %s\n\nRespond with JSON only: {\"theme\":\"...\",\"steps\":[{\"title\":\"...\",\"description\":\"...\"}]}", reviewResult.Feedback),
+				ContextArtifact: contextArtifact,
 			},
 		).Get(ctx, &refineResult); err != nil {
 			break
 		}
-		var refined codexact.Plan
-		if err := codexact.ExtractPlan(refineResult.Response, &refined); err == nil && len(refined.Steps) > 0 {
+		if refined := parsePlan(refineResult.Response); len(refined.Steps) > 0 {
 			plan = refined
+		} else if refined.Theme != "" {
+			plan.Theme = refined.Theme
 		}
 	}
 
@@ -124,4 +110,19 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 		WorkDir:         designResult.WorkDir,
 		Branch:          designResult.Branch,
 	}, nil
+}
+
+// parsePlan extracts the first JSON object from raw and unmarshals it as a Plan.
+// Returns a zero Plan (empty Steps) when no valid JSON is found.
+func parsePlan(raw string) codexact.Plan {
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start == -1 || end <= start {
+		return codexact.Plan{}
+	}
+	var p codexact.Plan
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &p); err != nil {
+		return codexact.Plan{}
+	}
+	return p
 }

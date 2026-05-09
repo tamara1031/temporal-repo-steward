@@ -76,9 +76,10 @@ type ReviewResult struct {
 
 // ChatInput is the input to ChatActivity.
 type ChatInput struct {
-	Message   string `json:"message"`
-	SessionID string `json:"session_id,omitempty"`
-	Context   string `json:"context,omitempty"`
+	Message         string `json:"message"`
+	SessionID       string `json:"session_id,omitempty"`
+	Context         string `json:"context,omitempty"`
+	ContextArtifact string `json:"context_artifact,omitempty"` // path to a file whose content is prepended to Message
 }
 
 // ChatResult is the output of ChatActivity.
@@ -179,26 +180,26 @@ func (a *Activities) ImplementActivity(ctx context.Context, in ImplementInput) (
 		optContext(ctxText),
 	)
 
-	shaBefore, _ := gitutil.Output(ctx, s.WorkDir, "rev-parse", "HEAD")
+	shaBefore, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 
 	if _, err := a.cx.Run(ctx, codex.RunOptions{WorkDir: s.WorkDir, Prompt: prompt}); err != nil {
 		return ImplementResult{}, fmt.Errorf("codex: %w", err)
 	}
 
-	shaAfter, _ := gitutil.Output(ctx, s.WorkDir, "rev-parse", "HEAD")
+	shaAfter, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 	commitSHA := strings.TrimSpace(shaAfter)
 	hasChanges := strings.TrimSpace(shaBefore) != commitSHA
 
 	var diffStat string
 	if hasChanges {
-		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "diff", "--stat", "HEAD~1", "HEAD")
+		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "--stat", "HEAD~1", "HEAD")
 	} else {
-		_ = gitutil.Run(ctx, s.WorkDir, "add", "-A")
-		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "diff", "--cached", "--stat")
+		_ = gitutil.Run(ctx, s.WorkDir, "git", "add", "-A")
+		diffStat, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "--cached", "--stat")
 		hasChanges = strings.TrimSpace(diffStat) != ""
 		if hasChanges {
-			_ = gitutil.Run(ctx, s.WorkDir, "commit", "-m", fmt.Sprintf("refactor: %s", in.Step.Title))
-			sha, _ := gitutil.Output(ctx, s.WorkDir, "rev-parse", "HEAD")
+			_ = gitutil.Run(ctx, s.WorkDir, "git", "commit", "-m", fmt.Sprintf("refactor: %s", in.Step.Title))
+			sha, _ := gitutil.Output(ctx, s.WorkDir, "git", "rev-parse", "HEAD")
 			commitSHA = strings.TrimSpace(sha)
 		}
 	}
@@ -223,7 +224,7 @@ func (a *Activities) ReviewActivity(ctx context.Context, in ReviewInput) (Review
 
 	diff := in.Diff
 	if diff == "" {
-		diff, _ = gitutil.Output(ctx, s.WorkDir, "diff", "HEAD~1", "HEAD")
+		diff, _ = gitutil.Output(ctx, s.WorkDir, "git", "diff", "HEAD~1", "HEAD")
 	}
 
 	ctxText := ""
@@ -265,9 +266,15 @@ func (a *Activities) ChatActivity(ctx context.Context, in ChatInput) (ChatResult
 		sessionID = newSessionID()
 	}
 
+	ctxText := in.Context
+	if in.ContextArtifact != "" {
+		if data, err := os.ReadFile(in.ContextArtifact); err == nil {
+			ctxText = string(data)
+		}
+	}
 	prompt := in.Message
-	if in.Context != "" {
-		prompt = in.Context + "\n\n" + in.Message
+	if ctxText != "" {
+		prompt = ctxText + "\n\n" + in.Message
 	}
 
 	workDir := ""
@@ -305,7 +312,7 @@ func (a *Activities) ConsultAdvisorActivity(ctx context.Context, summary string)
 	return verdict, nil
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ─────────────────────────────────────────────────────────────────────────────
 
 func newSessionID() string {
 	return fmt.Sprintf("sess-%d", time.Now().UnixNano())
@@ -325,9 +332,4 @@ func extractJSON(raw string, v any) error {
 		return fmt.Errorf("no JSON object found")
 	}
 	return json.Unmarshal([]byte(raw[start:end+1]), v)
-}
-
-// ExtractPlan parses a Plan from a raw codex response string.
-func ExtractPlan(raw string, p *Plan) error {
-	return extractJSON(raw, p)
 }
