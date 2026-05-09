@@ -42,12 +42,23 @@ type RobustPRMergeInput struct {
 	AutoMerge    bool
 }
 
+// MergeOutcome classifies the terminal state of a RobustPRMergeWorkflow execution.
+type MergeOutcome string
+
+const (
+	MergeOutcomeMerged             MergeOutcome = "merged"
+	MergeOutcomeMergeQueued        MergeOutcome = "merge-queued"
+	MergeOutcomeExternallyClosed   MergeOutcome = "closed-externally"
+	MergeOutcomeExternallyMerged   MergeOutcome = "merged-externally"
+	MergeOutcomeAutoMergeDisabled  MergeOutcome = "auto-merge-disabled"
+)
+
 // RobustPRMergeResult is the result of RobustPRMergeWorkflow.
 type RobustPRMergeResult struct {
 	PRNumber int
 	PRURL    string
 	Merged   bool
-	Outcome  string // "merged" | "merge-queued" | "closed-externally" | "auto-merge-disabled"
+	Outcome  MergeOutcome
 }
 
 // RobustPRMergeWorkflow creates a PR, waits for CI, self-heals failures, and merges.
@@ -110,15 +121,19 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 
 		switch ciResult.Outcome {
 		case ghact.CIOutcomeExternallyMerged:
-			result.Outcome = "merged-externally"
+			result.Outcome = MergeOutcomeExternallyMerged
 			result.Merged = true
 			return result, nil
 		case ghact.CIOutcomeExternallyClosed:
-			result.Outcome = "closed-externally"
+			result.Outcome = MergeOutcomeExternallyClosed
+			return result, nil
+		case ghact.CIOutcomeMergeQueued:
+			result.Outcome = MergeOutcomeMergeQueued
+			result.Merged = true
 			return result, nil
 		case ghact.CIOutcomeSuccess:
 			if !in.AutoMerge {
-				result.Outcome = "auto-merge-disabled"
+				result.Outcome = MergeOutcomeAutoMergeDisabled
 				return result, nil
 			}
 			if err := workflow.ExecuteActivity(
@@ -135,7 +150,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 				ghact.ObservePRStateInput{WorkDir: in.WorkDir, PRNumber: prResult.Number, Attempts: postMergePollAttempts},
 			).Get(ctx, &finalOutcome)
 			result.Merged = true
-			result.Outcome = string(finalOutcome)
+			result.Outcome = ciOutcomeToMerge(finalOutcome)
 			return result, nil
 		case ghact.CIOutcomeFailure:
 			if iteration == maxFixIterations-1 {
@@ -185,4 +200,19 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 	}
 
 	return result, rserrors.NewMaxIterations()
+}
+
+// ciOutcomeToMerge maps a post-merge CIOutcome observation to a MergeOutcome.
+// ObservePRStateActivity returns CIOutcomeSuccess when the PR is confirmed
+// merged, CIOutcomeExternallyClosed when it was closed instead, and
+// CIOutcomeMergeQueued when it is still in the merge queue after all attempts.
+func ciOutcomeToMerge(o ghact.CIOutcome) MergeOutcome {
+	switch o {
+	case ghact.CIOutcomeExternallyClosed:
+		return MergeOutcomeExternallyClosed
+	case ghact.CIOutcomeMergeQueued:
+		return MergeOutcomeMergeQueued
+	default:
+		return MergeOutcomeMerged
+	}
 }

@@ -52,7 +52,7 @@ type PeriodicRefactorResult struct {
 	StepsDone  int
 	PRNumber   int
 	PRURL      string
-	PROutcome  string
+	PROutcome  MergeOutcome
 	Skipped    bool
 	SkipReason string
 }
