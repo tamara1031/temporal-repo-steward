@@ -57,7 +57,7 @@ func (s *prLifecycleSuite) Test_AutoMergeDisabled_WhenCIPasses() {
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
 	s.Equal(42, result.PRNumber)
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(workflow.MergeOutcomeAutoMergeDisabled, result.Outcome)
 	s.False(result.Merged)
 }
 
@@ -75,7 +75,7 @@ func (s *prLifecycleSuite) Test_ExternallyMerged() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("merged-externally", result.Outcome)
+	s.Equal(workflow.MergeOutcomeExternallyMerged, result.Outcome)
 	s.True(result.Merged)
 }
 
@@ -93,8 +93,26 @@ func (s *prLifecycleSuite) Test_ExternallyClosed() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("closed-externally", result.Outcome)
+	s.Equal(workflow.MergeOutcomeExternallyClosed, result.Outcome)
 	s.False(result.Merged)
+}
+
+func (s *prLifecycleSuite) Test_MergeQueued_WhenCIReportsMergeQueued() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeMergeQueued}, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.RobustPRMergeResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.Equal(workflow.MergeOutcomeMergeQueued, result.Outcome)
+	s.True(result.Merged)
 }
 
 func (s *prLifecycleSuite) Test_AutoMerge_CIPassesThenMerges() {
@@ -158,7 +176,7 @@ func (s *prLifecycleSuite) Test_SelfHeal_OneCIFailureThenSuccess() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(workflow.MergeOutcomeAutoMergeDisabled, result.Outcome)
 	s.Equal(42, result.PRNumber)
 }
 
