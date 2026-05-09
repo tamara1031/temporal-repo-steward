@@ -2,10 +2,8 @@ package workflow
 
 import (
 	"fmt"
-	"time"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -32,21 +30,11 @@ type DesignPhaseResult struct {
 
 // DesignPhaseWorkflow generates a refactoring plan and refines it through review rounds.
 func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhaseResult, error) {
-	opts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts:    5,
-			InitialInterval:    30 * time.Second,
-			BackoffCoefficient: 3,
-			MaximumInterval:    10 * time.Minute,
-		},
-	}
-
 	var acts *codexact.Activities
 
 	var designResult codexact.DesignResult
 	if err := workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, opts),
+		workflow.WithActivityOptions(ctx, codexActivityOpts()),
 		acts.DesignActivity,
 		codexact.DesignInput{
 			SessionID:  in.SessionID,
@@ -73,7 +61,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 	for round := 0; round < maxDesignRounds; round++ {
 		var reviewResult codexact.ReviewResult
 		if err := workflow.ExecuteActivity(
-			workflow.WithActivityOptions(ctx, opts),
+			workflow.WithActivityOptions(ctx, reviewActivityOpts()),
 			acts.ReviewActivity,
 			codexact.ReviewInput{
 				SessionID:       sessionID,
@@ -96,7 +84,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 
 		var refineResult codexact.ChatResult
 		if err := workflow.ExecuteActivity(
-			workflow.WithActivityOptions(ctx, opts),
+			workflow.WithActivityOptions(ctx, reviewActivityOpts()),
 			acts.ChatActivity,
 			codexact.ChatInput{
 				SessionID: sessionID,
