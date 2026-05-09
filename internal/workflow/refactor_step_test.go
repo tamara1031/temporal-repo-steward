@@ -32,7 +32,7 @@ func (s *refactorStepSuite) Test_Completed() {
 
 	// Both review concerns ("correctness", "quality") return ok.
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "ok"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.ReviewVerdictOK}, nil)
 
 	env.ExecuteWorkflow(workflow.RefactorStepWorkflow, workflow.RefactorStepInput{
 		SessionID: "test-session-00000001",
@@ -77,12 +77,12 @@ func (s *refactorStepSuite) Test_BudgetHalted_AdvisorRetries() {
 
 	// Every review returns critical_block, causing a block each iteration.
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "critical_block", Feedback: "not safe"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.ReviewVerdictCriticalBlock, Feedback: "not safe"}, nil)
 
 	// On the last iteration the advisor is consulted; it returns "retry",
 	// so the workflow does not abort — it simply exhausts its budget.
 	env.OnActivity(acts.ConsultAdvisorActivity, mock.Anything, mock.Anything).
-		Return(codexact.AdvisorVerdict{Verdict: "retry", Rationale: "maybe next time"}, nil)
+		Return(codexact.AdvisorVerdict{Verdict: codexact.AdvisorDecisionRetry, Rationale: "maybe next time"}, nil)
 
 	env.ExecuteWorkflow(workflow.RefactorStepWorkflow, workflow.RefactorStepInput{
 		SessionID: "test-session-00000001",
@@ -106,10 +106,10 @@ func (s *refactorStepSuite) Test_CircuitBroken_AdvisorAborts() {
 		Return(codexact.ImplementResult{HasChanges: true, CommitSHA: "sha1"}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "critical_block", Feedback: "dangerous"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.ReviewVerdictCriticalBlock, Feedback: "dangerous"}, nil)
 
 	env.OnActivity(acts.ConsultAdvisorActivity, mock.Anything, mock.Anything).
-		Return(codexact.AdvisorVerdict{Verdict: "abort", Rationale: "too risky"}, nil)
+		Return(codexact.AdvisorVerdict{Verdict: codexact.AdvisorDecisionAbort, Rationale: "too risky"}, nil)
 
 	env.ExecuteWorkflow(workflow.RefactorStepWorkflow, workflow.RefactorStepInput{
 		SessionID: "test-session-00000001",
@@ -131,11 +131,11 @@ func (s *refactorStepSuite) Test_Retries_WhenFirstIterationBlocked() {
 
 	// Iter 0: critical_block on correctness → blocked, retry.
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "critical_block", Feedback: "fix it"}, nil).Once()
+		Return(codexact.ReviewResult{Verdict: codexact.ReviewVerdictCriticalBlock, Feedback: "fix it"}, nil).Once()
 
 	// Iter 1: both concerns pass → completed.
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "ok"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.ReviewVerdictOK}, nil)
 
 	env.ExecuteWorkflow(workflow.RefactorStepWorkflow, workflow.RefactorStepInput{
 		SessionID: "test-session-00000001",
