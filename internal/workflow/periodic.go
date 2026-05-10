@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	gitact "github.com/tamara1031/temporal-repo-steward/internal/activity/git"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -89,6 +90,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 		progress.Skipped = true
 		progress.SkipReason = designResult.SkipReason
 		progress.Phase = PhaseDone
+		cleanupWorkspace(ctx, designResult.WorkDir)
 		return PeriodicRefactorResult{
 			SessionID:  designResult.SessionID,
 			Skipped:    true,
@@ -135,6 +137,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 		progress.Skipped = true
 		progress.SkipReason = "no steps completed successfully"
 		progress.Phase = PhaseDone
+		cleanupWorkspace(ctx, workDir)
 		return PeriodicRefactorResult{
 			SessionID:  sessionID,
 			Skipped:    true,
@@ -145,7 +148,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 	progress.Phase = PhasePR
 
 	var prResult RobustPRMergeResult
-	if err := workflow.ExecuteChildWorkflow(
+	prErr := workflow.ExecuteChildWorkflow(
 		workflow.WithChildOptions(ctx, childOpts),
 		RobustPRMergeWorkflow,
 		RobustPRMergeInput{
@@ -158,17 +161,20 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 			SessionID:    sessionID,
 			AutoMerge:    in.AutoMerge,
 		},
-	).Get(ctx, &prResult); err != nil {
-		progress.Phase = PhaseDone
+	).Get(ctx, &prResult)
+
+	progress.Phase = PhaseDone
+	cleanupWorkspace(ctx, workDir)
+
+	if prErr != nil {
 		return PeriodicRefactorResult{
 			SessionID: sessionID,
 			StepsDone: stepsDone,
-		}, fmt.Errorf("PR lifecycle: %w", err)
+		}, fmt.Errorf("PR lifecycle: %w", prErr)
 	}
 
 	progress.PRNumber = prResult.PRNumber
 	progress.PRURL = prResult.PRURL
-	progress.Phase = PhaseDone
 
 	return PeriodicRefactorResult{
 		SessionID: sessionID,
@@ -177,4 +183,18 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 		PRURL:     prResult.PRURL,
 		PROutcome: prResult.Outcome,
 	}, nil
+}
+
+// cleanupWorkspace removes the on-disk workspace for workDir after a workflow
+// run completes. Errors are silently swallowed — cleanup is best-effort.
+func cleanupWorkspace(ctx workflow.Context, workDir string) {
+	if workDir == "" {
+		return
+	}
+	var gitActs *gitact.Activities
+	_ = workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, fastGHActOpts()),
+		gitActs.CleanupWorkspaceActivity,
+		workDir,
+	).Get(ctx, nil)
 }

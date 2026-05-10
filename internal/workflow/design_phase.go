@@ -51,6 +51,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 	if len(designResult.Plan.Steps) == 0 {
 		return DesignPhaseResult{
 			SessionID:  designResult.SessionID,
+			WorkDir:    designResult.WorkDir,
 			Skipped:    true,
 			SkipReason: "planner returned no steps",
 		}, nil
@@ -79,6 +80,8 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 		}
 		if reviewResult.Verdict == "critical_block" {
 			return DesignPhaseResult{
+				SessionID:  sessionID,
+				WorkDir:    designResult.WorkDir,
 				Skipped:    true,
 				SkipReason: "design review critical_block: " + reviewResult.Feedback,
 			}, nil
