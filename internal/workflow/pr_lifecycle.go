@@ -12,8 +12,20 @@ import (
 )
 
 const (
-	maxFixIterations     = 8
+	// MaxFixIterations is the maximum number of CI self-heal attempts per PR.
+	MaxFixIterations      = 8
 	postMergePollAttempts = 6
+)
+
+// PROutcome is the terminal outcome of a RobustPRMergeWorkflow run.
+type PROutcome string
+
+const (
+	PROutcomeMerged           PROutcome = "merged"
+	PROutcomeMergedExternally PROutcome = "merged-externally"
+	PROutcomeMergeQueued      PROutcome = "merge-queued"
+	PROutcomeClosedExternally PROutcome = "closed-externally"
+	PROutcomeAutoMergeDisabled PROutcome = "auto-merge-disabled"
 )
 
 // QueryCIProgress is the query name for CIProgress.
@@ -47,12 +59,12 @@ type RobustPRMergeResult struct {
 	PRNumber int
 	PRURL    string
 	Merged   bool
-	Outcome  string // "merged" | "merge-queued" | "closed-externally" | "auto-merge-disabled"
+	Outcome  PROutcome
 }
 
 // RobustPRMergeWorkflow creates a PR, waits for CI, self-heals failures, and merges.
 func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustPRMergeResult, error) {
-	ciProgress := CIProgress{MaxIterations: maxFixIterations}
+	ciProgress := CIProgress{MaxIterations: MaxFixIterations}
 	if err := workflow.SetQueryHandler(ctx, QueryCIProgress, func() (CIProgress, error) {
 		return ciProgress, nil
 	}); err != nil {
@@ -94,7 +106,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 	ciProgress.PRNumber = prResult.Number
 	ciProgress.PRURL = prResult.URL
 
-	for iteration := 0; iteration < maxFixIterations; iteration++ {
+	for iteration := 0; iteration < MaxFixIterations; iteration++ {
 		ciProgress.Iteration = iteration
 
 		var ciResult ghact.WaitForCIResult
@@ -110,15 +122,15 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 
 		switch ciResult.Outcome {
 		case ghact.CIOutcomeExternallyMerged:
-			result.Outcome = "merged-externally"
+			result.Outcome = PROutcomeMergedExternally
 			result.Merged = true
 			return result, nil
 		case ghact.CIOutcomeExternallyClosed:
-			result.Outcome = "closed-externally"
+			result.Outcome = PROutcomeClosedExternally
 			return result, nil
 		case ghact.CIOutcomeSuccess:
 			if !in.AutoMerge {
-				result.Outcome = "auto-merge-disabled"
+				result.Outcome = PROutcomeAutoMergeDisabled
 				return result, nil
 			}
 			if err := workflow.ExecuteActivity(
@@ -135,10 +147,10 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 				ghact.ObservePRStateInput{WorkDir: in.WorkDir, PRNumber: prResult.Number, Attempts: postMergePollAttempts},
 			).Get(ctx, &finalOutcome)
 			result.Merged = true
-			result.Outcome = string(finalOutcome)
+			result.Outcome = ciOutcomeToPROutcome(finalOutcome)
 			return result, nil
 		case ghact.CIOutcomeFailure:
-			if iteration == maxFixIterations-1 {
+			if iteration == MaxFixIterations-1 {
 				return result, rserrors.NewMaxIterations()
 			}
 			slog.Info("CI failed, attempting self-heal", "iteration", iteration)
@@ -181,8 +193,23 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			).Get(ctx, nil); err != nil {
 				return result, fmt.Errorf("push fix: %w", err)
 			}
+		default:
+			slog.Warn("unexpected CI outcome, continuing", "outcome", ciResult.Outcome)
 		}
 	}
 
 	return result, rserrors.NewMaxIterations()
+}
+
+// ciOutcomeToPROutcome maps the post-merge CIOutcome values returned by
+// ObservePRStateActivity to their canonical PROutcome equivalents.
+func ciOutcomeToPROutcome(o ghact.CIOutcome) PROutcome {
+	switch o {
+	case ghact.CIOutcomeSuccess:
+		return PROutcomeMerged
+	case ghact.CIOutcomeExternallyClosed:
+		return PROutcomeClosedExternally
+	default:
+		return PROutcomeMergeQueued
+	}
 }

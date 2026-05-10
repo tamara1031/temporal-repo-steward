@@ -10,6 +10,15 @@ import (
 
 const maxStepIter = 2
 
+// StepKind is the outcome classification for a single refactoring step.
+type StepKind string
+
+const (
+	StepKindCompleted     StepKind = "completed"
+	StepKindBudgetHalted  StepKind = "budget-halted"
+	StepKindCircuitBroken StepKind = "circuit-broken"
+)
+
 // RefactorStepInput is the input to RefactorStepWorkflow.
 type RefactorStepInput struct {
 	SessionID       string
@@ -19,7 +28,7 @@ type RefactorStepInput struct {
 
 // RefactorStepResult is the result of RefactorStepWorkflow.
 type RefactorStepResult struct {
-	Kind      string // "completed" | "budget-halted" | "circuit-broken"
+	Kind      StepKind
 	CommitSHA string
 }
 
@@ -38,11 +47,11 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 				ContextArtifact: in.ContextArtifact,
 			},
 		).Get(ctx, &implResult); err != nil {
-			return RefactorStepResult{Kind: "circuit-broken"}, err
+			return RefactorStepResult{Kind: StepKindCircuitBroken}, err
 		}
 
 		if !implResult.HasChanges {
-			return RefactorStepResult{Kind: "circuit-broken"}, fmt.Errorf("implement produced no changes")
+			return RefactorStepResult{Kind: StepKindCircuitBroken}, fmt.Errorf("implement produced no changes")
 		}
 
 		blocked := false
@@ -69,7 +78,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 						acts.ConsultAdvisorActivity,
 						advisorSummary,
 					).Get(ctx, &verdict); err == nil && verdict.Verdict == "abort" {
-						return RefactorStepResult{Kind: "circuit-broken"}, rserrors.AdvisorAbort(verdict.Rationale)
+						return RefactorStepResult{Kind: StepKindCircuitBroken}, rserrors.AdvisorAbort(verdict.Rationale)
 					}
 				}
 				blocked = true
@@ -79,11 +88,11 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 
 		if !blocked {
 			return RefactorStepResult{
-				Kind:      "completed",
+				Kind:      StepKindCompleted,
 				CommitSHA: implResult.CommitSHA,
 			}, nil
 		}
 	}
 
-	return RefactorStepResult{Kind: "budget-halted"}, nil
+	return RefactorStepResult{Kind: StepKindBudgetHalted}, nil
 }
