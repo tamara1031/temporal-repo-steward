@@ -233,6 +233,43 @@ func (s *prLifecycleSuite) Test_QueryCIProgress_SelfHealIteration() {
 	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
 }
 
+// Test_MergeQueued verifies that CIOutcomeMergeQueued is handled explicitly and
+// returns the "merge-queued" outcome string without consuming further iterations.
+func (s *prLifecycleSuite) Test_MergeQueued() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeMergeQueued}, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.RobustPRMergeResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.Equal(string(ghact.CIOutcomeMergeQueued), result.Outcome)
+	s.False(result.Merged)
+}
+
+// Test_UnknownCIOutcome verifies that an unrecognised outcome returns an error
+// immediately rather than silently consuming all retry iterations.
+func (s *prLifecycleSuite) Test_UnknownCIOutcome() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcome("banana")}, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.Error(env.GetWorkflowError())
+	s.Contains(env.GetWorkflowError().Error(), "banana")
+}
+
 // maxFixIterations is re-exported via the test package for assertion purposes.
 // Keep in sync with the unexported constant in pr_lifecycle.go.
 const maxFixIterations = 8

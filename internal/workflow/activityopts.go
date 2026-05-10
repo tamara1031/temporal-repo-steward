@@ -21,9 +21,11 @@ func shortActOpts() workflow.ActivityOptions {
 }
 
 // longCodexActOpts covers codex implement activities that may run up to 35 min.
+// HeartbeatTimeout is set so Temporal can detect a hung codex process and retry.
 func longCodexActOpts() workflow.ActivityOptions {
 	return workflow.ActivityOptions{
 		StartToCloseTimeout: 35 * time.Minute,
+		HeartbeatTimeout:    5 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts:    5,
 			InitialInterval:    30 * time.Second,

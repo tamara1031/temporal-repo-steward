@@ -157,12 +157,29 @@ func (a *Activities) DesignActivity(ctx context.Context, in DesignInput) (Design
 
 // ImplementActivity applies a single refactoring step.
 func (a *Activities) ImplementActivity(ctx context.Context, in ImplementInput) (ImplementResult, error) {
-	activity.RecordHeartbeat(ctx, "implement: running codex")
+	activity.RecordHeartbeat(ctx, "implement: starting")
 
 	s, ok := a.mgr.Session(in.SessionID)
 	if !ok {
 		return ImplementResult{}, fmt.Errorf("session not found: %s", in.SessionID)
 	}
+
+	// Send a heartbeat every 2 minutes so Temporal can detect a hung codex process
+	// before HeartbeatTimeout (5 min) expires and trigger a retry.
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				activity.RecordHeartbeat(ctx, "implement: codex still running")
+			case <-hbCtx.Done():
+				return
+			}
+		}
+	}()
 
 	ctxText := ""
 	if in.ContextArtifact != "" {

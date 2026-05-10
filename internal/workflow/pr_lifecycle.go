@@ -116,6 +116,9 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 		case ghact.CIOutcomeExternallyClosed:
 			result.Outcome = "closed-externally"
 			return result, nil
+		case ghact.CIOutcomeMergeQueued:
+			result.Outcome = string(ghact.CIOutcomeMergeQueued)
+			return result, nil
 		case ghact.CIOutcomeSuccess:
 			if !in.AutoMerge {
 				result.Outcome = "auto-merge-disabled"
@@ -181,6 +184,9 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			).Get(ctx, nil); err != nil {
 				return result, fmt.Errorf("push fix: %w", err)
 			}
+		default:
+			// Unknown outcome: return an error immediately rather than burning iterations silently.
+			return result, fmt.Errorf("unexpected CI outcome %q at iteration %d", ciResult.Outcome, iteration)
 		}
 	}
 
