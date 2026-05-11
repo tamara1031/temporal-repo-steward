@@ -122,6 +122,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 				ContextArtifact: contextArtifact,
 			},
 		).Get(ctx, &stepResult); err != nil {
+			workflow.GetLogger(ctx).Error("refactor step workflow failed, stopping step execution", "error", err, "step", i)
 			break
 		}
 		if stepResult.Kind == "circuit-broken" {

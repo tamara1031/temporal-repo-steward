@@ -75,7 +75,7 @@ func (s *prLifecycleSuite) Test_ExternallyMerged() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("merged-externally", result.Outcome)
+	s.Equal(string(ghact.CIOutcomeExternallyMerged), result.Outcome)
 	s.True(result.Merged)
 }
 
@@ -93,7 +93,7 @@ func (s *prLifecycleSuite) Test_ExternallyClosed() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("closed-externally", result.Outcome)
+	s.Equal(string(ghact.CIOutcomeExternallyClosed), result.Outcome)
 	s.False(result.Merged)
 }
 

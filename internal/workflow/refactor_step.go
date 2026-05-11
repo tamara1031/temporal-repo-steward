@@ -57,6 +57,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 					ContextArtifact: in.ContextArtifact,
 				},
 			).Get(ctx, &reviewResult); err != nil {
+				workflow.GetLogger(ctx).Error("review activity failed, skipping concern", "error", err, "concern", concern, "iter", iter)
 				continue
 			}
 

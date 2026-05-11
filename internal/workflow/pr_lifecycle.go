@@ -47,7 +47,7 @@ type RobustPRMergeResult struct {
 	PRNumber int
 	PRURL    string
 	Merged   bool
-	Outcome  string // "merged" | "merge-queued" | "closed-externally" | "auto-merge-disabled"
+	Outcome  string // one of ghact.CIOutcome string values: "externally_merged" | "externally_closed" | "success" | "merge-queued" | "auto-merge-disabled"
 }
 
 // RobustPRMergeWorkflow creates a PR, waits for CI, self-heals failures, and merges.
@@ -110,11 +110,11 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 
 		switch ciResult.Outcome {
 		case ghact.CIOutcomeExternallyMerged:
-			result.Outcome = "merged-externally"
+			result.Outcome = string(ghact.CIOutcomeExternallyMerged)
 			result.Merged = true
 			return result, nil
 		case ghact.CIOutcomeExternallyClosed:
-			result.Outcome = "closed-externally"
+			result.Outcome = string(ghact.CIOutcomeExternallyClosed)
 			return result, nil
 		case ghact.CIOutcomeSuccess:
 			if !in.AutoMerge {
@@ -163,6 +163,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 					Message:   fmt.Sprintf("Fix this CI failure. Apply the fix to the files in the working directory.\n\nFailed CI logs:\n%s", failLogs),
 				},
 			).Get(ctx, &fixResult); err != nil {
+				workflow.GetLogger(ctx).Error("codex self-heal chat failed, retrying CI poll", "error", err, "iteration", iteration)
 				continue
 			}
 

@@ -1,9 +1,7 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
 	"go.temporal.io/sdk/workflow"
@@ -71,6 +69,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 				ContextArtifact: contextArtifact,
 			},
 		).Get(ctx, &reviewResult); err != nil {
+			workflow.GetLogger(ctx).Error("design review activity failed, accepting current plan", "error", err, "round", round)
 			break
 		}
 
@@ -99,6 +98,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 				ContextArtifact: contextArtifact,
 			},
 		).Get(ctx, &refineResult); err != nil {
+			workflow.GetLogger(ctx).Error("design refine activity failed, stopping refinement", "error", err, "round", round)
 			break
 		}
 		if refined := parsePlan(refineResult.Response); len(refined.Steps) > 0 {
@@ -120,13 +120,8 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 // parsePlan extracts the first JSON object from raw and unmarshals it as a Plan.
 // Returns a zero Plan (empty Steps) when no valid JSON is found.
 func parsePlan(raw string) codexact.Plan {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end <= start {
-		return codexact.Plan{}
-	}
 	var p codexact.Plan
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &p); err != nil {
+	if err := codexact.ExtractJSON(raw, &p); err != nil {
 		return codexact.Plan{}
 	}
 	return p
