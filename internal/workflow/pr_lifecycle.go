@@ -121,6 +121,72 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 				result.Outcome = "auto-merge-disabled"
 				return result, nil
 			}
+
+			// Before merging, check whether the PR has accumulated conflict markers
+			// since CI was triggered (e.g. a concurrent push to the base branch).
+			var mergeCheck ghact.CheckMergeableResult
+			_ = workflow.ExecuteActivity(
+				workflow.WithActivityOptions(ctx, fastGHActOpts()),
+				ghActs.CheckMergeableActivity,
+				ghact.CheckMergeableInput{WorkDir: in.WorkDir, PRNumber: prResult.Number},
+			).Get(ctx, &mergeCheck)
+
+			if mergeCheck.Status == ghact.MergeStateDirty {
+				if iteration == maxFixIterations-1 {
+					return result, rserrors.NewMaxIterations()
+				}
+				slog.Info("PR has merge conflicts, attempting resolution", "iteration", iteration)
+
+				var mergeResult gitact.FetchAndMergeResult
+				if err := workflow.ExecuteActivity(
+					workflow.WithActivityOptions(ctx, heavyGitActOpts()),
+					gitActs.FetchAndStartMergeActivity,
+					gitact.FetchAndMergeInput{WorkDir: in.WorkDir, BaseBranch: in.BaseBranch},
+				).Get(ctx, &mergeResult); err != nil {
+					continue // fetch/merge activity failed; retry on next iteration
+				}
+
+				if mergeResult.HasConflict {
+					_ = workflow.ExecuteActivity(
+						workflow.WithActivityOptions(ctx, longCodexActOpts()),
+						codexActs.ChatActivity,
+						codexact.ChatInput{
+							SessionID: in.SessionID,
+							Message:   "Resolve all merge conflict markers in the working directory. Apply conflict resolution only — no other changes.",
+						},
+					).Get(ctx, nil)
+
+					var conflictSHA string
+					if err := workflow.ExecuteActivity(
+						workflow.WithActivityOptions(ctx, fastGHActOpts()),
+						gitActs.CommitAllActivity,
+						gitact.CommitAllInput{
+							WorkDir: in.WorkDir,
+							Message: fmt.Sprintf("fix: resolve merge conflicts (iteration %d)", iteration+1),
+						},
+					).Get(ctx, &conflictSHA); err != nil {
+						// codex produced no diff; abort the in-progress merge and retry.
+						_ = workflow.ExecuteActivity(
+							workflow.WithActivityOptions(ctx, fastGHActOpts()),
+							gitActs.AbortMergeActivity,
+							in.WorkDir,
+						).Get(ctx, nil)
+						continue
+					}
+				}
+
+				// Either the merge was clean or conflicts were resolved; push and re-queue CI.
+				if err := workflow.ExecuteActivity(
+					workflow.WithActivityOptions(ctx, heavyGitActOpts()),
+					gitActs.PushBranchActivity,
+					gitact.PushInput{WorkDir: in.WorkDir, Branch: in.Branch, Force: true},
+				).Get(ctx, nil); err != nil {
+					return result, fmt.Errorf("push conflict resolution: %w", err)
+				}
+				continue
+			}
+
+			// PR is CLEAN (or UNKNOWN — proceed optimistically).
 			if err := workflow.ExecuteActivity(
 				workflow.WithActivityOptions(ctx, fastGHActOpts()),
 				ghActs.MergePRActivity,

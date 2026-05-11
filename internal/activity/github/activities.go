@@ -294,6 +294,49 @@ func (a *Activities) ObservePRStateActivity(ctx context.Context, in ObservePRSta
 	return CIOutcomeMergeQueued, nil
 }
 
+// MergeStateStatus is the GitHub merge-state status of a pull request,
+// as returned by `gh pr view --json mergeStateStatus`.
+type MergeStateStatus string
+
+const (
+	MergeStateClean   MergeStateStatus = "CLEAN"
+	MergeStateDirty   MergeStateStatus = "DIRTY"   // has merge conflicts
+	MergeStateBehind  MergeStateStatus = "BEHIND"  // out of date with base
+	MergeStateBlocked MergeStateStatus = "BLOCKED" // pending checks or reviews
+	MergeStateUnknown MergeStateStatus = "UNKNOWN"
+)
+
+// CheckMergeableInput is the input to CheckMergeableActivity.
+type CheckMergeableInput struct {
+	WorkDir  string
+	PRNumber int
+}
+
+// CheckMergeableResult is the output of CheckMergeableActivity.
+type CheckMergeableResult struct {
+	Status MergeStateStatus
+}
+
+// CheckMergeableActivity queries the pull request's merge state status.
+// Returns MergeStateUnknown on any error so the caller can proceed with a
+// best-effort merge rather than stalling on a transient API failure.
+func (a *Activities) CheckMergeableActivity(ctx context.Context, in CheckMergeableInput) (CheckMergeableResult, error) {
+	out, err := ghOutput(ctx, in.WorkDir, "pr", "view",
+		fmt.Sprintf("%d", in.PRNumber),
+		"--json", "mergeStateStatus",
+	)
+	if err != nil {
+		return CheckMergeableResult{Status: MergeStateUnknown}, nil
+	}
+	var pr struct {
+		MergeStateStatus string `json:"mergeStateStatus"`
+	}
+	if err := json.Unmarshal([]byte(out), &pr); err != nil || pr.MergeStateStatus == "" {
+		return CheckMergeableResult{Status: MergeStateUnknown}, nil
+	}
+	return CheckMergeableResult{Status: MergeStateStatus(pr.MergeStateStatus)}, nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func ghOutput(ctx context.Context, dir string, args ...string) (string, error) {

@@ -105,6 +105,9 @@ func (s *prLifecycleSuite) Test_AutoMerge_CIPassesThenMerges() {
 	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
 		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeSuccess}, nil)
 
+	env.OnActivity(ghActs.CheckMergeableActivity, mock.Anything, mock.Anything).
+		Return(ghact.CheckMergeableResult{Status: ghact.MergeStateClean}, nil)
+
 	env.OnActivity(ghActs.MergePRActivity, mock.Anything, mock.Anything).Return(nil)
 
 	env.OnActivity(ghActs.ObservePRStateActivity, mock.Anything, mock.Anything).
@@ -118,6 +121,97 @@ func (s *prLifecycleSuite) Test_AutoMerge_CIPassesThenMerges() {
 	s.NoError(env.GetWorkflowResult(&result))
 	s.True(result.Merged)
 	s.Equal(42, result.PRNumber)
+}
+
+// Test_ConflictResolved_ThenMerges verifies the conflict-resolution path:
+// CI passes but the PR is DIRTY (merge conflicts) → codex resolves → push →
+// CI passes again (CLEAN) → auto-merge proceeds.
+func (s *prLifecycleSuite) Test_ConflictResolved_ThenMerges() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	var gitActs *gitact.Activities
+	var codexActs *codexact.Activities
+	s.setupPushAndCreate(env)
+
+	// Both CI polls return success.
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeSuccess}, nil)
+
+	// First mergeability check: DIRTY (has conflicts).
+	env.OnActivity(ghActs.CheckMergeableActivity, mock.Anything, mock.Anything).
+		Return(ghact.CheckMergeableResult{Status: ghact.MergeStateDirty}, nil).Once()
+
+	// Second check (after conflict resolution push): CLEAN.
+	env.OnActivity(ghActs.CheckMergeableActivity, mock.Anything, mock.Anything).
+		Return(ghact.CheckMergeableResult{Status: ghact.MergeStateClean}, nil).Once()
+
+	// Fetch+merge reveals actual conflict markers.
+	env.OnActivity(gitActs.FetchAndStartMergeActivity, mock.Anything, mock.Anything).
+		Return(gitact.FetchAndMergeResult{HasConflict: true}, nil)
+
+	// Codex resolves the conflicts.
+	env.OnActivity(codexActs.ChatActivity, mock.Anything, mock.Anything).
+		Return(codexact.ChatResult{SessionID: "test-session-00000001", Response: "resolved"}, nil)
+
+	// Commit the resolved state.
+	env.OnActivity(gitActs.CommitAllActivity, mock.Anything, mock.Anything).
+		Return("conflictsha", nil)
+
+	// Force-push the conflict resolution (second push after initial).
+	env.OnActivity(gitActs.PushBranchActivity, mock.Anything, mock.Anything).Return(nil)
+
+	env.OnActivity(ghActs.MergePRActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(ghActs.ObservePRStateActivity, mock.Anything, mock.Anything).
+		Return(ghact.CIOutcomeSuccess, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(true))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.RobustPRMergeResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.True(result.Merged)
+	s.Equal(42, result.PRNumber)
+}
+
+// Test_ConflictCleanMerge_ThenMerges verifies that when CheckMergeable returns
+// DIRTY but FetchAndStartMerge succeeds without conflict markers (stale state),
+// the resolved merge commit is pushed and CI re-queued, ultimately merging.
+func (s *prLifecycleSuite) Test_ConflictCleanMerge_ThenMerges() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	var gitActs *gitact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeSuccess}, nil)
+
+	// First check: stale DIRTY (no actual conflicts in the working tree).
+	env.OnActivity(ghActs.CheckMergeableActivity, mock.Anything, mock.Anything).
+		Return(ghact.CheckMergeableResult{Status: ghact.MergeStateDirty}, nil).Once()
+
+	// Second check: CLEAN after fast-forward push.
+	env.OnActivity(ghActs.CheckMergeableActivity, mock.Anything, mock.Anything).
+		Return(ghact.CheckMergeableResult{Status: ghact.MergeStateClean}, nil).Once()
+
+	// Local merge succeeds with no conflicts (fast-forward or already up-to-date).
+	env.OnActivity(gitActs.FetchAndStartMergeActivity, mock.Anything, mock.Anything).
+		Return(gitact.FetchAndMergeResult{HasConflict: false}, nil)
+
+	// Push the (possibly no-op) merge commit.
+	env.OnActivity(gitActs.PushBranchActivity, mock.Anything, mock.Anything).Return(nil)
+
+	env.OnActivity(ghActs.MergePRActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(ghActs.ObservePRStateActivity, mock.Anything, mock.Anything).
+		Return(ghact.CIOutcomeSuccess, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(true))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.RobustPRMergeResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.True(result.Merged)
 }
 
 // Test_SelfHeal_OneCIFailureThenSuccess verifies the self-heal loop:
