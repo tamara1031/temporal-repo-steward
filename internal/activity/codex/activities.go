@@ -325,12 +325,53 @@ func optContext(ctx string) string {
 	return "Context:\n" + ctx
 }
 
-// ExtractJSON extracts the first JSON object from a raw string and unmarshals it.
+// ExtractJSON extracts the first complete JSON object from raw and unmarshals it
+// into v. It uses bracket-depth counting so it correctly handles responses where
+// the LLM includes multiple JSON objects or surrounding prose.
 func ExtractJSON(raw string, v any) error {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end == -1 || end <= start {
-		return fmt.Errorf("no JSON object found")
+	candidate := firstJSONObject(raw)
+	if candidate == "" {
+		return fmt.Errorf("no JSON object found in response")
 	}
-	return json.Unmarshal([]byte(raw[start:end+1]), v)
+	return json.Unmarshal([]byte(candidate), v)
+}
+
+// firstJSONObject returns the first syntactically complete JSON object from raw
+// by tracking brace depth and string boundaries (including escape sequences).
+// Returns "" when no complete object is found.
+func firstJSONObject(raw string) string {
+	start := -1
+	depth := 0
+	inString := false
+	escape := false
+	for i, ch := range raw {
+		if escape {
+			escape = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escape = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch ch {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && start >= 0 {
+				return raw[start : i+1]
+			}
+		}
+	}
+	return ""
 }
