@@ -135,3 +135,37 @@ func (a *Activities) CheckConflictActivity(ctx context.Context, in CheckConflict
 	return false, nil
 }
 
+// FetchAndMergeInput is the input to FetchAndStartMergeActivity.
+type FetchAndMergeInput struct {
+	WorkDir    string
+	BaseBranch string
+}
+
+// FetchAndMergeResult is the output of FetchAndStartMergeActivity.
+type FetchAndMergeResult struct {
+	HasConflict bool
+}
+
+// FetchAndStartMergeActivity fetches origin and merges the base branch into HEAD.
+// On success the merge commit is created automatically.
+// On conflict, the merge state is left in place (NOT aborted) so that a
+// subsequent codex repair step can inspect and resolve the conflict markers.
+// Returns HasConflict=true when conflict markers are present.
+func (a *Activities) FetchAndStartMergeActivity(ctx context.Context, in FetchAndMergeInput) (FetchAndMergeResult, error) {
+	activity.RecordHeartbeat(ctx, "fetching origin")
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "fetch", "origin"); err != nil {
+		return FetchAndMergeResult{}, fmt.Errorf("fetch: %w", err)
+	}
+	activity.RecordHeartbeat(ctx, "merging base branch")
+	if err := gitutil.Run(ctx, in.WorkDir, "git", "merge", "--no-ff", "origin/"+in.BaseBranch); err != nil {
+		// Leave conflict markers in place for the caller to repair.
+		return FetchAndMergeResult{HasConflict: true}, nil
+	}
+	return FetchAndMergeResult{HasConflict: false}, nil
+}
+
+// AbortMergeActivity runs git merge --abort to clean up an in-progress merge.
+func (a *Activities) AbortMergeActivity(ctx context.Context, workDir string) error {
+	return gitutil.Run(ctx, workDir, "git", "merge", "--abort")
+}
+
