@@ -43,7 +43,7 @@ func (s *refactorStepSuite) Test_Completed() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RefactorStepResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("completed", result.Kind)
+	s.Equal(workflow.StepKindCompleted, result.Kind)
 	s.Equal("abc123", result.CommitSHA)
 }
 
@@ -93,7 +93,7 @@ func (s *refactorStepSuite) Test_BudgetHalted_AdvisorRetries() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RefactorStepResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("budget-halted", result.Kind)
+	s.Equal(workflow.StepKindBudgetHalted, result.Kind)
 }
 
 // Test_CircuitBroken_AdvisorAborts verifies that when the advisor returns "abort"
@@ -146,6 +146,6 @@ func (s *refactorStepSuite) Test_Retries_WhenFirstIterationBlocked() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RefactorStepResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("completed", result.Kind)
+	s.Equal(workflow.StepKindCompleted, result.Kind)
 	s.Equal("sha2", result.CommitSHA)
 }

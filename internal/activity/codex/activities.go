@@ -67,9 +67,18 @@ type ReviewInput struct {
 	ContextArtifact string `json:"context_artifact,omitempty"`
 }
 
+// Verdict classifies the outcome of a ReviewActivity call.
+type Verdict string
+
+const (
+	VerdictOK            Verdict = "ok"
+	VerdictSuggest       Verdict = "suggest"
+	VerdictCriticalBlock Verdict = "critical_block"
+)
+
 // ReviewResult is the output of ReviewActivity.
 type ReviewResult struct {
-	Verdict     string   `json:"verdict"` // "ok" | "suggest" | "critical_block"
+	Verdict     Verdict  `json:"verdict"`
 	Feedback    string   `json:"feedback"`
 	Suggestions []string `json:"suggestions"`
 }
@@ -88,11 +97,20 @@ type ChatResult struct {
 	Response  string `json:"response"`
 }
 
+// AdvisorVerdictKind classifies the outcome of a ConsultAdvisorActivity call.
+type AdvisorVerdictKind string
+
+const (
+	AdvisorVerdictKindRetry          AdvisorVerdictKind = "retry"
+	AdvisorVerdictKindAbort          AdvisorVerdictKind = "abort"
+	AdvisorVerdictKindChangeStrategy AdvisorVerdictKind = "change-strategy"
+)
+
 // AdvisorVerdict is the structured output of ConsultAdvisorActivity.
 type AdvisorVerdict struct {
-	Verdict         string `json:"verdict"` // "retry" | "abort" | "change-strategy"
-	Rationale       string `json:"rationale"`
-	SuggestedAction string `json:"suggested_action"`
+	Verdict         AdvisorVerdictKind `json:"verdict"`
+	Rationale       string             `json:"rationale"`
+	SuggestedAction string             `json:"suggested_action"`
 }
 
 // Activities holds direct codex CLI + workspace dependencies.
@@ -250,7 +268,7 @@ func (a *Activities) ReviewActivity(ctx context.Context, in ReviewInput) (Review
 
 	var result ReviewResult
 	if err := ExtractJSON(raw, &result); err != nil {
-		result = ReviewResult{Verdict: "suggest", Feedback: raw}
+		result = ReviewResult{Verdict: VerdictSuggest, Feedback: raw}
 	}
 
 	slog.Info("review complete", "verdict", result.Verdict, "concern", in.Concern)
@@ -305,7 +323,7 @@ func (a *Activities) ConsultAdvisorActivity(ctx context.Context, summary string)
 
 	var verdict AdvisorVerdict
 	if err := ExtractJSON(raw, &verdict); err != nil {
-		return AdvisorVerdict{Verdict: "retry", Rationale: raw}, nil
+		return AdvisorVerdict{Verdict: AdvisorVerdictKindRetry, Rationale: raw}, nil
 	}
 
 	slog.Info("advisor verdict", "verdict", verdict.Verdict)
