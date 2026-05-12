@@ -27,6 +27,20 @@ type Plan struct {
 	Steps []Step `json:"steps"`
 }
 
+// MergePlan applies a refined plan onto base.
+// If refined has steps, it fully replaces base.
+// If refined has only a theme (no steps), only the theme is updated.
+// If refined has neither, base is returned unchanged.
+func MergePlan(base, refined Plan) Plan {
+	if len(refined.Steps) > 0 {
+		return refined
+	}
+	if refined.Theme != "" {
+		base.Theme = refined.Theme
+	}
+	return base
+}
+
 // DesignInput is the input to DesignActivity.
 type DesignInput struct {
 	SessionID  string `json:"session_id,omitempty"`
