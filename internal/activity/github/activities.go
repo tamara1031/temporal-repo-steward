@@ -75,6 +75,7 @@ const (
 	CIOutcomeExternallyMerged CIOutcome = "externally_merged"
 	CIOutcomeExternallyClosed CIOutcome = "externally_closed"
 	CIOutcomeMergeQueued      CIOutcome = "merge-queued"
+	CIOutcomeMerged           CIOutcome = "merged"
 )
 
 // WaitForCIResult is the output of WaitForCIActivity.

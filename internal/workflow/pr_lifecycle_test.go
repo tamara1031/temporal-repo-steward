@@ -57,7 +57,7 @@ func (s *prLifecycleSuite) Test_AutoMergeDisabled_WhenCIPasses() {
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
 	s.Equal(42, result.PRNumber)
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(workflow.PROutcomeAutoMergeDisabled, result.Outcome)
 	s.False(result.Merged)
 }
 
@@ -75,7 +75,7 @@ func (s *prLifecycleSuite) Test_ExternallyMerged() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("merged-externally", result.Outcome)
+	s.Equal(workflow.PROutcomeExternallyMerged, result.Outcome)
 	s.True(result.Merged)
 }
 
@@ -93,7 +93,7 @@ func (s *prLifecycleSuite) Test_ExternallyClosed() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("closed-externally", result.Outcome)
+	s.Equal(workflow.PROutcomeExternallyClosed, result.Outcome)
 	s.False(result.Merged)
 }
 
@@ -158,7 +158,7 @@ func (s *prLifecycleSuite) Test_SelfHeal_OneCIFailureThenSuccess() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(workflow.PROutcomeAutoMergeDisabled, result.Outcome)
 	s.Equal(42, result.PRNumber)
 }
 
@@ -184,7 +184,7 @@ func (s *prLifecycleSuite) Test_QueryCIProgress_PRCreated() {
 
 	s.Equal(42, progress.PRNumber)
 	s.Equal("https://github.com/owner/repo/pull/42", progress.PRURL)
-	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
+	s.Equal(ghact.CIOutcomeSuccess, progress.LastOutcome)
 	s.Equal(maxFixIterations, progress.MaxIterations)
 }
 
@@ -230,7 +230,7 @@ func (s *prLifecycleSuite) Test_QueryCIProgress_SelfHealIteration() {
 	s.Equal(42, progress.PRNumber)
 	// Iteration 1 (0-indexed) is where success was observed.
 	s.Equal(1, progress.Iteration)
-	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
+	s.Equal(ghact.CIOutcomeSuccess, progress.LastOutcome)
 }
 
 // maxFixIterations is re-exported via the test package for assertion purposes.

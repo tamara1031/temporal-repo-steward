@@ -12,8 +12,24 @@ import (
 )
 
 const (
-	maxFixIterations     = 8
+	maxFixIterations      = 8
 	postMergePollAttempts = 6
+)
+
+// PROutcome is the final disposition of a pull request after RobustPRMergeWorkflow.
+type PROutcome string
+
+const (
+	// PROutcomeExternallyMerged means the PR was merged by someone/something outside this workflow.
+	PROutcomeExternallyMerged PROutcome = "externally_merged"
+	// PROutcomeExternallyClosed means the PR was closed without merging by an external actor.
+	PROutcomeExternallyClosed PROutcome = "externally_closed"
+	// PROutcomeMerged means this workflow successfully merged the PR.
+	PROutcomeMerged PROutcome = "merged"
+	// PROutcomeMergeQueued means the merge was initiated but not yet confirmed (e.g. merge queue).
+	PROutcomeMergeQueued PROutcome = "merge-queued"
+	// PROutcomeAutoMergeDisabled means CI passed but auto-merge was not enabled.
+	PROutcomeAutoMergeDisabled PROutcome = "auto-merge-disabled"
 )
 
 // QueryCIProgress is the query name for CIProgress.
@@ -23,11 +39,11 @@ const QueryCIProgress = "ci_progress"
 // RobustPRMergeWorkflow. It lets operators track which CI self-heal iteration
 // is in flight and what the last observed CI outcome was.
 type CIProgress struct {
-	PRNumber      int    `json:"pr_number"`
-	PRURL         string `json:"pr_url"`
-	Iteration     int    `json:"iteration"`
-	MaxIterations int    `json:"max_iterations"`
-	LastOutcome   string `json:"last_outcome,omitempty"`
+	PRNumber      int               `json:"pr_number"`
+	PRURL         string            `json:"pr_url"`
+	Iteration     int               `json:"iteration"`
+	MaxIterations int               `json:"max_iterations"`
+	LastOutcome   ghact.CIOutcome   `json:"last_outcome,omitempty"`
 }
 
 // RobustPRMergeInput is the input to RobustPRMergeWorkflow.
@@ -47,7 +63,7 @@ type RobustPRMergeResult struct {
 	PRNumber int
 	PRURL    string
 	Merged   bool
-	Outcome  string // "merged" | "merge-queued" | "closed-externally" | "auto-merge-disabled"
+	Outcome  PROutcome
 }
 
 // RobustPRMergeWorkflow creates a PR, waits for CI, self-heals failures, and merges.
@@ -106,19 +122,19 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			return result, err
 		}
 
-		ciProgress.LastOutcome = string(ciResult.Outcome)
+		ciProgress.LastOutcome = ciResult.Outcome
 
 		switch ciResult.Outcome {
 		case ghact.CIOutcomeExternallyMerged:
-			result.Outcome = "merged-externally"
+			result.Outcome = PROutcomeExternallyMerged
 			result.Merged = true
 			return result, nil
 		case ghact.CIOutcomeExternallyClosed:
-			result.Outcome = "closed-externally"
+			result.Outcome = PROutcomeExternallyClosed
 			return result, nil
 		case ghact.CIOutcomeSuccess:
 			if !in.AutoMerge {
-				result.Outcome = "auto-merge-disabled"
+				result.Outcome = PROutcomeAutoMergeDisabled
 				return result, nil
 			}
 			if err := workflow.ExecuteActivity(
@@ -135,7 +151,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 				ghact.ObservePRStateInput{WorkDir: in.WorkDir, PRNumber: prResult.Number, Attempts: postMergePollAttempts},
 			).Get(ctx, &finalOutcome)
 			result.Merged = true
-			result.Outcome = string(finalOutcome)
+			result.Outcome = ciOutcomeToPROutcome(finalOutcome)
 			return result, nil
 		case ghact.CIOutcomeFailure:
 			if iteration == maxFixIterations-1 {
@@ -185,4 +201,18 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 	}
 
 	return result, rserrors.NewMaxIterations()
+}
+
+// ciOutcomeToPROutcome translates the CIOutcome returned by ObservePRStateActivity
+// into a semantically accurate PROutcome for the merge result.
+func ciOutcomeToPROutcome(o ghact.CIOutcome) PROutcome {
+	switch o {
+	case ghact.CIOutcomeMergeQueued:
+		return PROutcomeMergeQueued
+	case ghact.CIOutcomeExternallyClosed:
+		return PROutcomeExternallyClosed
+	default:
+		// CIOutcomeSuccess and anything unexpected both mean the PR landed as merged.
+		return PROutcomeMerged
+	}
 }
