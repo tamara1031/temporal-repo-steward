@@ -60,7 +60,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 				continue
 			}
 
-			if reviewResult.Verdict == "critical_block" {
+			if reviewResult.Verdict == codexact.ReviewVerdictCriticalBlock {
 				if iter == maxStepIter-1 {
 					advisorSummary := fmt.Sprintf("Step: %s\nConcern: %s\nFeedback: %s", in.Step.Title, concern, reviewResult.Feedback)
 					var verdict codexact.AdvisorVerdict

@@ -67,11 +67,20 @@ type ReviewInput struct {
 	ContextArtifact string `json:"context_artifact,omitempty"`
 }
 
+// ReviewVerdict is the typed outcome of a code review.
+type ReviewVerdict string
+
+const (
+	ReviewVerdictOK            ReviewVerdict = "ok"
+	ReviewVerdictSuggest       ReviewVerdict = "suggest"
+	ReviewVerdictCriticalBlock ReviewVerdict = "critical_block"
+)
+
 // ReviewResult is the output of ReviewActivity.
 type ReviewResult struct {
-	Verdict     string   `json:"verdict"` // "ok" | "suggest" | "critical_block"
-	Feedback    string   `json:"feedback"`
-	Suggestions []string `json:"suggestions"`
+	Verdict     ReviewVerdict `json:"verdict"`
+	Feedback    string        `json:"feedback"`
+	Suggestions []string      `json:"suggestions"`
 }
 
 // ChatInput is the input to ChatActivity.
@@ -250,7 +259,7 @@ func (a *Activities) ReviewActivity(ctx context.Context, in ReviewInput) (Review
 
 	var result ReviewResult
 	if err := ExtractJSON(raw, &result); err != nil {
-		result = ReviewResult{Verdict: "suggest", Feedback: raw}
+		result = ReviewResult{Verdict: ReviewVerdictSuggest, Feedback: raw}
 	}
 
 	slog.Info("review complete", "verdict", result.Verdict, "concern", in.Concern)
