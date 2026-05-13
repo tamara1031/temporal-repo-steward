@@ -61,7 +61,7 @@ func (s *periodicSuite) Test_SkipsWhenAllStepsFail() {
 
 	// All step child workflows fail.
 	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
-		Return(workflow.RefactorStepResult{Kind: "circuit-broken"}, testErr("implement produced no changes"))
+		Return(workflow.RefactorStepResult{Kind: workflow.StepOutcomeCircuitBroken}, testErr("implement produced no changes"))
 
 	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
 		RepoFullName: "owner/repo",
@@ -97,7 +97,7 @@ func (s *periodicSuite) Test_HappyPath_AutoMergeDisabled() {
 		}, nil)
 
 	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
-		Return(workflow.RefactorStepResult{Kind: "completed", CommitSHA: "sha1"}, nil)
+		Return(workflow.RefactorStepResult{Kind: workflow.StepOutcomeCompleted, CommitSHA: "sha1"}, nil)
 
 	env.OnWorkflow(workflow.RobustPRMergeWorkflow, mock.Anything, mock.Anything).
 		Return(workflow.RobustPRMergeResult{
@@ -145,7 +145,7 @@ func (s *periodicSuite) Test_StepsCapAtMaxStepsPerRun() {
 		}, nil)
 
 	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
-		Return(workflow.RefactorStepResult{Kind: "completed", CommitSHA: "sha"}, nil)
+		Return(workflow.RefactorStepResult{Kind: workflow.StepOutcomeCompleted, CommitSHA: "sha"}, nil)
 
 	env.OnWorkflow(workflow.RobustPRMergeWorkflow, mock.Anything, mock.Anything).
 		Return(workflow.RobustPRMergeResult{PRNumber: 1, Outcome: "auto-merge-disabled"}, nil)
@@ -268,7 +268,7 @@ func (s *periodicSuite) Test_QueryProgress_AllStepsFail() {
 		}, nil)
 
 	env.OnWorkflow(workflow.RefactorStepWorkflow, mock.Anything, mock.Anything).
-		Return(workflow.RefactorStepResult{Kind: "circuit-broken"}, testErr("implement produced no changes"))
+		Return(workflow.RefactorStepResult{Kind: workflow.StepOutcomeCircuitBroken}, testErr("implement produced no changes"))
 
 	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
 		RepoFullName: "owner/repo",
