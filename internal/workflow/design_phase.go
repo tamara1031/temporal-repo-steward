@@ -1,9 +1,7 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
 	"go.temporal.io/sdk/workflow"
@@ -74,10 +72,10 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 			break
 		}
 
-		if reviewResult.Verdict == "ok" {
+		if reviewResult.Verdict == codexact.ReviewVerdictOK {
 			break
 		}
-		if reviewResult.Verdict == "critical_block" {
+		if reviewResult.Verdict == codexact.ReviewVerdictCriticalBlock {
 			return DesignPhaseResult{
 				Skipped:    true,
 				SkipReason: "design review critical_block: " + reviewResult.Feedback,
@@ -120,14 +118,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 // parsePlan extracts the first JSON object from raw and unmarshals it as a Plan.
 // Returns a zero Plan (empty Steps) when no valid JSON is found.
 func parsePlan(raw string) codexact.Plan {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end <= start {
-		return codexact.Plan{}
-	}
 	var p codexact.Plan
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &p); err != nil {
-		return codexact.Plan{}
-	}
+	_ = codexact.ExtractJSON(raw, &p)
 	return p
 }

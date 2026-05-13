@@ -10,6 +10,15 @@ import (
 
 const maxStepIter = 2
 
+// StepKind is the typed outcome of a RefactorStepWorkflow execution.
+type StepKind string
+
+const (
+	StepKindCompleted     StepKind = "completed"
+	StepKindBudgetHalted  StepKind = "budget-halted"
+	StepKindCircuitBroken StepKind = "circuit-broken"
+)
+
 // RefactorStepInput is the input to RefactorStepWorkflow.
 type RefactorStepInput struct {
 	SessionID       string
@@ -19,7 +28,7 @@ type RefactorStepInput struct {
 
 // RefactorStepResult is the result of RefactorStepWorkflow.
 type RefactorStepResult struct {
-	Kind      string // "completed" | "budget-halted" | "circuit-broken"
+	Kind      StepKind
 	CommitSHA string
 }
 
@@ -38,11 +47,11 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 				ContextArtifact: in.ContextArtifact,
 			},
 		).Get(ctx, &implResult); err != nil {
-			return RefactorStepResult{Kind: "circuit-broken"}, err
+			return RefactorStepResult{Kind: StepKindCircuitBroken}, err
 		}
 
 		if !implResult.HasChanges {
-			return RefactorStepResult{Kind: "circuit-broken"}, fmt.Errorf("implement produced no changes")
+			return RefactorStepResult{Kind: StepKindCircuitBroken}, fmt.Errorf("implement produced no changes")
 		}
 
 		blocked := false
@@ -60,7 +69,7 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 				continue
 			}
 
-			if reviewResult.Verdict == "critical_block" {
+			if reviewResult.Verdict == codexact.ReviewVerdictCriticalBlock {
 				if iter == maxStepIter-1 {
 					advisorSummary := fmt.Sprintf("Step: %s\nConcern: %s\nFeedback: %s", in.Step.Title, concern, reviewResult.Feedback)
 					var verdict codexact.AdvisorVerdict
@@ -68,8 +77,8 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 						workflow.WithActivityOptions(ctx, shortActOpts()),
 						acts.ConsultAdvisorActivity,
 						advisorSummary,
-					).Get(ctx, &verdict); err == nil && verdict.Verdict == "abort" {
-						return RefactorStepResult{Kind: "circuit-broken"}, rserrors.AdvisorAbort(verdict.Rationale)
+					).Get(ctx, &verdict); err == nil && verdict.Verdict == codexact.AdvisorVerdictAbort {
+						return RefactorStepResult{Kind: StepKindCircuitBroken}, rserrors.AdvisorAbort(verdict.Rationale)
 					}
 				}
 				blocked = true
@@ -79,11 +88,11 @@ func RefactorStepWorkflow(ctx workflow.Context, in RefactorStepInput) (RefactorS
 
 		if !blocked {
 			return RefactorStepResult{
-				Kind:      "completed",
+				Kind:      StepKindCompleted,
 				CommitSHA: implResult.CommitSHA,
 			}, nil
 		}
 	}
 
-	return RefactorStepResult{Kind: "budget-halted"}, nil
+	return RefactorStepResult{Kind: StepKindBudgetHalted}, nil
 }
