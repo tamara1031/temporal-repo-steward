@@ -67,17 +67,17 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 			acts.ReviewActivity,
 			codexact.ReviewInput{
 				SessionID:       sessionID,
-				Concern:         "design",
+				Concern:         codexact.ConcernDesign,
 				ContextArtifact: contextArtifact,
 			},
 		).Get(ctx, &reviewResult); err != nil {
 			break
 		}
 
-		if reviewResult.Verdict == "ok" {
+		if reviewResult.Verdict == codexact.VerdictOK {
 			break
 		}
-		if reviewResult.Verdict == "critical_block" {
+		if reviewResult.Verdict == codexact.VerdictCriticalBlock {
 			return DesignPhaseResult{
 				Skipped:    true,
 				SkipReason: "design review critical_block: " + reviewResult.Feedback,

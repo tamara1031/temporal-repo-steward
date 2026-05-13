@@ -60,7 +60,7 @@ func (s *designPhaseSuite) Test_HappyPath_ReviewOK() {
 		}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "ok"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.VerdictOK}, nil)
 
 	env.ExecuteWorkflow(workflow.DesignPhaseWorkflow, workflow.DesignPhaseInput{
 		Repo:       "owner/repo",
@@ -89,7 +89,7 @@ func (s *designPhaseSuite) Test_CriticalBlock_Skips() {
 		}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "critical_block", Feedback: "this is dangerous"}, nil)
+		Return(codexact.ReviewResult{Verdict: codexact.VerdictCriticalBlock, Feedback: "this is dangerous"}, nil)
 
 	env.ExecuteWorkflow(workflow.DesignPhaseWorkflow, workflow.DesignPhaseInput{
 		Repo: "owner/repo", BaseBranch: "main", Brief: "test",
@@ -118,7 +118,7 @@ func (s *designPhaseSuite) Test_RefinesOnSuggest_UpdatesPlan() {
 		}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "suggest", Feedback: "improve x"}, nil).Once()
+		Return(codexact.ReviewResult{Verdict: codexact.VerdictSuggest, Feedback: "improve x"}, nil).Once()
 
 	// Refinement returns a valid JSON plan with an updated theme and a new step list.
 	env.OnActivity(acts.ChatActivity, mock.Anything, mock.Anything).
@@ -158,7 +158,7 @@ func (s *designPhaseSuite) Test_RefinesOnSuggest_FallbackThemeOnly() {
 		}, nil)
 
 	env.OnActivity(acts.ReviewActivity, mock.Anything, mock.Anything).
-		Return(codexact.ReviewResult{Verdict: "suggest", Feedback: "improve x"}, nil).Once()
+		Return(codexact.ReviewResult{Verdict: codexact.VerdictSuggest, Feedback: "improve x"}, nil).Once()
 
 	// JSON has a theme but no steps — falls back to theme-only update.
 	env.OnActivity(acts.ChatActivity, mock.Anything, mock.Anything).

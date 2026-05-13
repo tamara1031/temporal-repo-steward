@@ -52,7 +52,7 @@ type PeriodicRefactorResult struct {
 	StepsDone  int
 	PRNumber   int
 	PRURL      string
-	PROutcome  string
+	PROutcome  PROutcome
 	Skipped    bool
 	SkipReason string
 }
@@ -124,7 +124,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 		).Get(ctx, &stepResult); err != nil {
 			break
 		}
-		if stepResult.Kind == "circuit-broken" {
+		if stepResult.Kind == StepCircuitBroken {
 			break
 		}
 		stepsDone++
