@@ -124,7 +124,7 @@ func PeriodicRefactorWorkflow(ctx workflow.Context, in PeriodicRefactorInput) (P
 		).Get(ctx, &stepResult); err != nil {
 			break
 		}
-		if stepResult.Kind == "circuit-broken" {
+		if stepResult.Kind == StepOutcomeCircuitBroken {
 			break
 		}
 		stepsDone++
