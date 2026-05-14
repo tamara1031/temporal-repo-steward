@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,6 +12,7 @@ import (
 	gitact "github.com/tamara1031/temporal-repo-steward/internal/activity/git"
 	ghact "github.com/tamara1031/temporal-repo-steward/internal/activity/github"
 	codexcli "github.com/tamara1031/temporal-repo-steward/internal/codex"
+	"github.com/tamara1031/temporal-repo-steward/internal/config"
 	"github.com/tamara1031/temporal-repo-steward/internal/workflow"
 	"github.com/tamara1031/temporal-repo-steward/internal/workspace"
 	"go.temporal.io/sdk/client"
@@ -22,37 +22,41 @@ import (
 const taskQueue = "repo-steward"
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		// Write to stderr before the structured logger is configured.
+		_, _ = os.Stderr.WriteString("config error: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: parseLogLevel(getenv("LOG_LEVEL", "info")),
+		Level: cfg.Log.Level,
 	})))
 
-	tc, err := dialTemporal()
+	tc, err := dialTemporal(cfg.Temporal)
 	if err != nil {
 		slog.Error("temporal dial failed", "error", err)
 		os.Exit(1)
 	}
 	defer tc.Close()
 
-	mgr, err := workspace.NewManager(
-		getenv("WORKSPACE_ROOT", "/workspaces"),
-		mustGetenv("GITHUB_TOKEN"),
-		getenv("GIT_BOT_NAME", "repo-steward-bot"),
-		getenv("GIT_BOT_EMAIL", "repo-steward-bot@users.noreply.github.com"),
-	)
+	mgr, err := workspace.NewManager(workspace.ManagerConfig{
+		Root:     cfg.Workspace.Root,
+		Token:    cfg.Workspace.Token,
+		BotName:  cfg.Workspace.BotName,
+		BotEmail: cfg.Workspace.BotEmail,
+	})
 	if err != nil {
 		slog.Error("workspace manager init failed", "error", err)
 		os.Exit(1)
 	}
 
-	cx := codexcli.NewClient(
-		getenv("CODEX_BIN", "codex"),
-		getenv("CODEX_MODEL", ""),
-	)
+	cx := codexcli.NewClient(cfg.Codex.Bin, cfg.Codex.Model)
 
 	gitActs := &gitact.Activities{
-		BotName:  getenv("GIT_BOT_NAME", "repo-steward-bot"),
-		BotEmail: getenv("GIT_BOT_EMAIL", "repo-steward-bot@users.noreply.github.com"),
-		Token:    mustGetenv("GITHUB_TOKEN"),
+		BotName:  cfg.Workspace.BotName,
+		BotEmail: cfg.Workspace.BotEmail,
+		Token:    cfg.Workspace.Token,
 	}
 
 	tw := sdkworker.New(tc, taskQueue, sdkworker.Options{})
@@ -72,8 +76,8 @@ func main() {
 	}
 	defer tw.Stop()
 
-	if getenv("REGISTER_SCHEDULE", "false") == "true" {
-		if err := registerSchedule(tc); err != nil {
+	if cfg.Schedule.Register {
+		if err := registerSchedule(tc, cfg.Schedule); err != nil {
 			slog.Warn("schedule registration failed", "error", err)
 		}
 	}
@@ -86,23 +90,20 @@ func main() {
 	slog.Info("shutting down")
 }
 
-func registerSchedule(tc client.Client) error {
-	scheduleID := getenv("SCHEDULE_ID", "repo-steward-periodic-refactor")
-	cronExpr := getenv("SCHEDULE_CRON", "0 3 * * 1")
-
+func registerSchedule(tc client.Client, s config.ScheduleConfig) error {
 	in := workflow.PeriodicRefactorInput{
-		RepoFullName: mustGetenv("TARGET_REPO"),
-		BaseBranch:   getenv("BASE_BRANCH", "main"),
-		Brief:        mustGetenv("REFACTOR_BRIEF"),
-		PRTitle:      getenv("PR_TITLE", "chore: automated refactor"),
-		PRBody:       getenv("PR_BODY", "Automated refactoring pass by repo-steward."),
-		AutoMerge:    getenv("AUTO_MERGE", "false") == "true",
+		RepoFullName: s.TargetRepo,
+		BaseBranch:   s.BaseBranch,
+		Brief:        s.Brief,
+		PRTitle:      s.PRTitle,
+		PRBody:       s.PRBody,
+		AutoMerge:    s.AutoMerge,
 	}
 
 	_, err := tc.ScheduleClient().Create(context.Background(), client.ScheduleOptions{
-		ID: scheduleID,
+		ID: s.ID,
 		Spec: client.ScheduleSpec{
-			CronExpressions: []string{cronExpr},
+			CronExpressions: []string{s.CronExpr},
 		},
 		Action: &client.ScheduleWorkflowAction{
 			Workflow:  workflow.PeriodicRefactorWorkflow,
@@ -113,36 +114,15 @@ func registerSchedule(tc client.Client) error {
 	return err
 }
 
-func dialTemporal() (client.Client, error) {
+func dialTemporal(t config.TemporalConfig) (client.Client, error) {
 	opts := client.Options{
-		HostPort:  getenv("TEMPORAL_ADDRESS", "localhost:7233"),
-		Namespace: getenv("TEMPORAL_NAMESPACE", "default"),
+		HostPort:  t.Address,
+		Namespace: t.Namespace,
 	}
-	if getenv("TEMPORAL_TLS", "false") == "true" {
+	if t.TLS {
 		opts.ConnectionOptions = client.ConnectionOptions{
 			TLS: &tls.Config{MinVersion: tls.VersionTLS12},
 		}
 	}
 	return client.Dial(opts)
-}
-
-func mustGetenv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		panic(fmt.Sprintf("required env var %q is not set", key))
-	}
-	return v
-}
-
-func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func parseLogLevel(s string) slog.Level {
-	var l slog.Level
-	_ = l.UnmarshalText([]byte(s))
-	return l
 }

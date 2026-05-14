@@ -15,6 +15,17 @@ import (
 
 const defaultSessionTTL = 24 * time.Hour
 
+// ManagerConfig holds the credentials and identity used by Manager when
+// cloning repositories and committing on behalf of the bot. Using a struct
+// avoids the ambiguity of four positional string parameters that are easy
+// to accidentally transpose.
+type ManagerConfig struct {
+	Root     string
+	Token    string
+	BotName  string
+	BotEmail string
+}
+
 type Manager struct {
 	root        string
 	githubToken string
@@ -25,15 +36,15 @@ type Manager struct {
 	sessions map[string]*Session
 }
 
-func NewManager(root, githubToken, botName, botEmail string) (*Manager, error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
+func NewManager(cfg ManagerConfig) (*Manager, error) {
+	if err := os.MkdirAll(cfg.Root, 0o700); err != nil {
 		return nil, fmt.Errorf("workspace root: %w", err)
 	}
 	return &Manager{
-		root:        root,
-		githubToken: githubToken,
-		botName:     botName,
-		botEmail:    botEmail,
+		root:        cfg.Root,
+		githubToken: cfg.Token,
+		botName:     cfg.BotName,
+		botEmail:    cfg.BotEmail,
 		sessions:    make(map[string]*Session),
 	}, nil
 }
