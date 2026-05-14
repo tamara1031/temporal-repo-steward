@@ -11,40 +11,7 @@ import (
 )
 
 // Activities holds git operation implementations.
-type Activities struct {
-	BotName  string
-	BotEmail string
-	Token    string
-}
-
-// CloneInput is the input to CloneRepoActivity.
-type CloneInput struct {
-	RepoFullName string
-	BaseBranch   string
-	WorkDir      string
-	Branch       string
-}
-
-// CloneRepoActivity clones the repo and creates a working branch.
-func (a *Activities) CloneRepoActivity(ctx context.Context, in CloneInput) error {
-	if err := os.MkdirAll(in.WorkDir, 0o755); err != nil {
-		return err
-	}
-
-	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", a.Token, in.RepoFullName)
-	if err := gitutil.Run(ctx, in.WorkDir, "git", "clone", "--branch="+in.BaseBranch, cloneURL, "."); err != nil {
-		return fmt.Errorf("clone: %w", err)
-	}
-	activity.RecordHeartbeat(ctx, "cloned")
-
-	if err := gitutil.Run(ctx, in.WorkDir, "git", "config", "user.name", a.BotName); err != nil {
-		return err
-	}
-	if err := gitutil.Run(ctx, in.WorkDir, "git", "config", "user.email", a.BotEmail); err != nil {
-		return err
-	}
-	return gitutil.Run(ctx, in.WorkDir, "git", "checkout", "-b", in.Branch)
-}
+type Activities struct{}
 
 // CommitAllInput is the input to CommitAllActivity.
 type CommitAllInput struct {

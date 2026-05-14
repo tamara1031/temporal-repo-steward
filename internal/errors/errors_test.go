@@ -49,6 +49,12 @@ func TestErrorConstructors(t *testing.T) {
 			code:    rserrors.CodeWorkdirMissing,
 			msgFrag: "/tmp/missing",
 		},
+		{
+			name:    "invalid github out",
+			err:     rserrors.NewInvalidGitHubOut(`{"bad":"json"`),
+			code:    rserrors.CodeInvalidGitHubOut,
+			msgFrag: `{"bad":"json"`,
+		},
 	}
 
 	for _, c := range cases {

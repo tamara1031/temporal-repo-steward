@@ -54,7 +54,7 @@ func (a *Activities) CreatePRActivity(ctx context.Context, in CreatePRInput) (Cr
 		URL    string `json:"url"`
 	}
 	if err := json.Unmarshal([]byte(viewOut), &pr); err != nil {
-		return CreatePRResult{}, rserrors.NewNonRetryable(rserrors.CodeInvalidGitHubOut, viewOut)
+		return CreatePRResult{}, rserrors.NewInvalidGitHubOut(viewOut)
 	}
 	return CreatePRResult{Number: pr.Number, URL: pr.URL}, nil
 }

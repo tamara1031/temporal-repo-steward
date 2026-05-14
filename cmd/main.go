@@ -49,11 +49,7 @@ func main() {
 		getenv("CODEX_MODEL", ""),
 	)
 
-	gitActs := &gitact.Activities{
-		BotName:  getenv("GIT_BOT_NAME", "repo-steward-bot"),
-		BotEmail: getenv("GIT_BOT_EMAIL", "repo-steward-bot@users.noreply.github.com"),
-		Token:    mustGetenv("GITHUB_TOKEN"),
-	}
+	gitActs := &gitact.Activities{}
 
 	tw := sdkworker.New(tc, taskQueue, sdkworker.Options{})
 
