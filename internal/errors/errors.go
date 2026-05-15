@@ -4,13 +4,11 @@ import "go.temporal.io/sdk/temporal"
 
 const (
 	CodeMissingCredentials = "MISSING_CREDENTIALS"
-	CodeInvalidGitRef      = "INVALID_GIT_REF"
 	CodeWorkdirMissing     = "WORKDIR_MISSING"
 	CodeCITimeout          = "CI_TIMEOUT"
 	CodeMaxIterations      = "MAX_ITERATIONS"
 	CodeNoFixDiff          = "NO_FIX_DIFF"
 	CodeAdvisorAbort       = "ADVISOR_ABORT"
-	CodePlannerInvalid     = "PLANNER_INVALID"
 	CodeInvalidGitHubOut   = "INVALID_GITHUB_OUTPUT"
 )
 
