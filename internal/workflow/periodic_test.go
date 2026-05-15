@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
+	ghact "github.com/tamara1031/temporal-repo-steward/internal/activity/github"
 	"github.com/tamara1031/temporal-repo-steward/internal/workflow"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -103,7 +104,7 @@ func (s *periodicSuite) Test_HappyPath_AutoMergeDisabled() {
 		Return(workflow.RobustPRMergeResult{
 			PRNumber: 99,
 			PRURL:    "https://github.com/owner/repo/pull/99",
-			Outcome:  "auto-merge-disabled",
+			Outcome:  ghact.PROutcomeAutoMergeDisabled,
 		}, nil)
 
 	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
@@ -122,7 +123,7 @@ func (s *periodicSuite) Test_HappyPath_AutoMergeDisabled() {
 	s.False(result.Skipped)
 	s.Equal(2, result.StepsDone) // maxStepsPerRun=2, both steps ran
 	s.Equal(99, result.PRNumber)
-	s.Equal("auto-merge-disabled", result.PROutcome)
+	s.Equal(ghact.PROutcomeAutoMergeDisabled, result.PROutcome)
 }
 
 // Test_StepsCapAtMaxStepsPerRun verifies that even when the plan has more steps
@@ -148,7 +149,7 @@ func (s *periodicSuite) Test_StepsCapAtMaxStepsPerRun() {
 		Return(workflow.RefactorStepResult{Kind: "completed", CommitSHA: "sha"}, nil)
 
 	env.OnWorkflow(workflow.RobustPRMergeWorkflow, mock.Anything, mock.Anything).
-		Return(workflow.RobustPRMergeResult{PRNumber: 1, Outcome: "auto-merge-disabled"}, nil)
+		Return(workflow.RobustPRMergeResult{PRNumber: 1, Outcome: ghact.PROutcomeAutoMergeDisabled}, nil)
 
 	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{
 		RepoFullName: "owner/repo",
@@ -223,7 +224,7 @@ func (s *periodicSuite) Test_QueryProgress_HappyPath() {
 		Return(workflow.RobustPRMergeResult{
 			PRNumber: 42,
 			PRURL:    "https://github.com/owner/repo/pull/42",
-			Outcome:  "merged",
+			Outcome:  ghact.PROutcomeMerged,
 		}, nil)
 
 	env.ExecuteWorkflow(workflow.PeriodicRefactorWorkflow, workflow.PeriodicRefactorInput{

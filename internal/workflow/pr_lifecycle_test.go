@@ -57,7 +57,7 @@ func (s *prLifecycleSuite) Test_AutoMergeDisabled_WhenCIPasses() {
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
 	s.Equal(42, result.PRNumber)
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(ghact.PROutcomeAutoMergeDisabled, result.Outcome)
 	s.False(result.Merged)
 }
 
@@ -75,7 +75,7 @@ func (s *prLifecycleSuite) Test_ExternallyMerged() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("merged-externally", result.Outcome)
+	s.Equal(ghact.PROutcomeMergedExternally, result.Outcome)
 	s.True(result.Merged)
 }
 
@@ -93,7 +93,7 @@ func (s *prLifecycleSuite) Test_ExternallyClosed() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("closed-externally", result.Outcome)
+	s.Equal(ghact.PROutcomeClosedExternally, result.Outcome)
 	s.False(result.Merged)
 }
 
@@ -108,7 +108,7 @@ func (s *prLifecycleSuite) Test_AutoMerge_CIPassesThenMerges() {
 	env.OnActivity(ghActs.MergePRActivity, mock.Anything, mock.Anything).Return(nil)
 
 	env.OnActivity(ghActs.ObservePRStateActivity, mock.Anything, mock.Anything).
-		Return(ghact.CIOutcomeSuccess, nil)
+		Return(ghact.PROutcomeMerged, nil)
 
 	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(true))
 
@@ -158,7 +158,7 @@ func (s *prLifecycleSuite) Test_SelfHeal_OneCIFailureThenSuccess() {
 	s.NoError(env.GetWorkflowError())
 	var result workflow.RobustPRMergeResult
 	s.NoError(env.GetWorkflowResult(&result))
-	s.Equal("auto-merge-disabled", result.Outcome)
+	s.Equal(ghact.PROutcomeAutoMergeDisabled, result.Outcome)
 	s.Equal(42, result.PRNumber)
 }
 
