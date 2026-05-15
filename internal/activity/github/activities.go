@@ -107,13 +107,8 @@ func (a *Activities) WaitForCIActivity(ctx context.Context, in WaitForCIInput) (
 		}
 
 		var pr struct {
-			State             string `json:"state"`
-			StatusCheckRollup []struct {
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
-				Name       string `json:"name"`
-				DetailsURL string `json:"detailsUrl"`
-			} `json:"statusCheckRollup"`
+			State             string        `json:"state"`
+			StatusCheckRollup []statusCheck `json:"statusCheckRollup"`
 		}
 		if err := json.Unmarshal([]byte(out), &pr); err != nil {
 			slog.Warn("parse pr view output failed", "error", err)
@@ -128,17 +123,7 @@ func (a *Activities) WaitForCIActivity(ctx context.Context, in WaitForCIInput) (
 			return WaitForCIResult{Outcome: CIOutcomeExternallyClosed}, nil
 		}
 
-		allDone, anyFailed := true, false
-		var failedRuns []string
-		for _, check := range pr.StatusCheckRollup {
-			if check.Status != "COMPLETED" {
-				allDone = false
-			} else if check.Conclusion == "FAILURE" || check.Conclusion == "TIMED_OUT" {
-				anyFailed = true
-				failedRuns = append(failedRuns, check.DetailsURL)
-			}
-		}
-
+		allDone, anyFailed, failedRuns := classifyChecks(pr.StatusCheckRollup)
 		if !allDone {
 			sleep(ctx, pollInterval)
 			continue
@@ -148,6 +133,34 @@ func (a *Activities) WaitForCIActivity(ctx context.Context, in WaitForCIInput) (
 		}
 		return WaitForCIResult{Outcome: CIOutcomeSuccess}, nil
 	}
+}
+
+// statusCheck is a single entry in GitHub's statusCheckRollup JSON.
+type statusCheck struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	Name       string `json:"name"`
+	DetailsURL string `json:"detailsUrl"`
+}
+
+// classifyChecks reports whether all checks have completed, whether any failed,
+// and the detail URLs of failing runs.
+// An empty slice is treated as "not yet started" — allDone is false — to prevent
+// a false-positive success when GitHub hasn't queued checks yet after PR creation.
+func classifyChecks(checks []statusCheck) (allDone bool, anyFailed bool, failedURLs []string) {
+	if len(checks) == 0 {
+		return false, false, nil
+	}
+	allDone = true
+	for _, c := range checks {
+		if c.Status != "COMPLETED" {
+			allDone = false
+		} else if c.Conclusion == "FAILURE" || c.Conclusion == "TIMED_OUT" {
+			anyFailed = true
+			failedURLs = append(failedURLs, c.DetailsURL)
+		}
+	}
+	return allDone, anyFailed, failedURLs
 }
 
 // FetchFailedRunLogsInput is the input to FetchFailedRunLogsActivity.

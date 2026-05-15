@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	maxFixIterations     = 8
+	// MaxFixIterations is the maximum number of CI self-heal attempts before giving up.
+	MaxFixIterations      = 8
 	postMergePollAttempts = 6
 )
 
@@ -52,7 +53,7 @@ type RobustPRMergeResult struct {
 
 // RobustPRMergeWorkflow creates a PR, waits for CI, self-heals failures, and merges.
 func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustPRMergeResult, error) {
-	ciProgress := CIProgress{MaxIterations: maxFixIterations}
+	ciProgress := CIProgress{MaxIterations: MaxFixIterations}
 	if err := workflow.SetQueryHandler(ctx, QueryCIProgress, func() (CIProgress, error) {
 		return ciProgress, nil
 	}); err != nil {
@@ -94,7 +95,7 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 	ciProgress.PRNumber = prResult.Number
 	ciProgress.PRURL = prResult.URL
 
-	for iteration := 0; iteration < maxFixIterations; iteration++ {
+	for iteration := 0; iteration < MaxFixIterations; iteration++ {
 		ciProgress.Iteration = iteration
 
 		var ciResult ghact.WaitForCIResult
@@ -137,8 +138,12 @@ func RobustPRMergeWorkflow(ctx workflow.Context, in RobustPRMergeInput) (RobustP
 			result.Merged = true
 			result.Outcome = string(finalOutcome)
 			return result, nil
+		case ghact.CIOutcomeMergeQueued:
+			// PR entered the merge queue; treat as a terminal non-error outcome.
+			result.Outcome = "merge-queued"
+			return result, nil
 		case ghact.CIOutcomeFailure:
-			if iteration == maxFixIterations-1 {
+			if iteration == MaxFixIterations-1 {
 				return result, rserrors.NewMaxIterations()
 			}
 			slog.Info("CI failed, attempting self-heal", "iteration", iteration)

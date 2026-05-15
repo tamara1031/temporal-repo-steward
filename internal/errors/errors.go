@@ -41,3 +41,7 @@ func AdvisorAbort(rationale string) error {
 func NewWorkdirMissing(path string) error {
 	return NewNonRetryable(CodeWorkdirMissing, "workspace directory missing: "+path)
 }
+
+func NewPlannerInvalid(detail string) error {
+	return NewNonRetryable(CodePlannerInvalid, "invalid plan: "+detail)
+}

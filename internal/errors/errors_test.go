@@ -49,6 +49,12 @@ func TestErrorConstructors(t *testing.T) {
 			code:    rserrors.CodeWorkdirMissing,
 			msgFrag: "/tmp/missing",
 		},
+		{
+			name:    "planner invalid",
+			err:     rserrors.NewPlannerInvalid("steps is empty"),
+			code:    rserrors.CodePlannerInvalid,
+			msgFrag: "steps is empty",
+		},
 	}
 
 	for _, c := range cases {

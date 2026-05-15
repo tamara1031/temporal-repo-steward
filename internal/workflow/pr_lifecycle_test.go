@@ -233,6 +233,26 @@ func (s *prLifecycleSuite) Test_QueryCIProgress_SelfHealIteration() {
 	s.Equal(string(ghact.CIOutcomeSuccess), progress.LastOutcome)
 }
 
-// maxFixIterations is re-exported via the test package for assertion purposes.
-// Keep in sync with the unexported constant in pr_lifecycle.go.
-const maxFixIterations = 8
+// maxFixIterations aliases the exported constant for use in assertions.
+const maxFixIterations = workflow.MaxFixIterations
+
+// Test_MergeQueued_Terminal verifies that CIOutcomeMergeQueued is treated as
+// a terminal success-like outcome and does not trigger self-heal iterations.
+func (s *prLifecycleSuite) Test_MergeQueued_Terminal() {
+	env := s.NewTestWorkflowEnvironment()
+	var ghActs *ghact.Activities
+	s.setupPushAndCreate(env)
+
+	env.OnActivity(ghActs.WaitForCIActivity, mock.Anything, mock.Anything).
+		Return(ghact.WaitForCIResult{Outcome: ghact.CIOutcomeMergeQueued}, nil)
+
+	env.ExecuteWorkflow(workflow.RobustPRMergeWorkflow, mergeInput(false))
+
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var result workflow.RobustPRMergeResult
+	s.NoError(env.GetWorkflowResult(&result))
+	s.Equal("merge-queued", result.Outcome)
+	s.Equal(42, result.PRNumber)
+	s.False(result.Merged)
+}
