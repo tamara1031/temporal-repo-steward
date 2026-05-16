@@ -1,9 +1,7 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	codexact "github.com/tamara1031/temporal-repo-steward/internal/activity/codex"
 	"go.temporal.io/sdk/workflow"
@@ -13,6 +11,9 @@ const maxDesignRounds = 2
 
 // DesignPhaseInput is the input to DesignPhaseWorkflow.
 type DesignPhaseInput struct {
+	// SessionID pins the workspace to a caller-chosen identity. When empty,
+	// the workflow derives one from its own RunID so retried activities reuse
+	// the same workspace rather than spawning a fresh clone each attempt.
 	SessionID  string
 	Repo       string
 	BaseBranch string
@@ -32,6 +33,13 @@ type DesignPhaseResult struct {
 
 // DesignPhaseWorkflow generates a refactoring plan and refines it through review rounds.
 func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhaseResult, error) {
+	// Derive a stable session ID from the workflow RunID so that activity
+	// retries reuse the same cloned workspace instead of creating orphaned ones.
+	sessionID := in.SessionID
+	if sessionID == "" {
+		sessionID = workflow.GetInfo(ctx).WorkflowExecution.RunID
+	}
+
 	var acts *codexact.Activities
 
 	var designResult codexact.DesignResult
@@ -39,7 +47,7 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 		workflow.WithActivityOptions(ctx, shortActOpts()),
 		acts.DesignActivity,
 		codexact.DesignInput{
-			SessionID:  in.SessionID,
+			SessionID:  sessionID,
 			Repo:       in.Repo,
 			BaseBranch: in.BaseBranch,
 			Brief:      in.Brief,
@@ -50,14 +58,13 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 
 	if len(designResult.Plan.Steps) == 0 {
 		return DesignPhaseResult{
-			SessionID:  designResult.SessionID,
+			SessionID:  sessionID,
 			Skipped:    true,
 			SkipReason: "planner returned no steps",
 		}, nil
 	}
 
 	plan := designResult.Plan
-	sessionID := designResult.SessionID
 	contextArtifact := designResult.ContextArtifact
 
 	for round := 0; round < maxDesignRounds; round++ {
@@ -120,13 +127,8 @@ func DesignPhaseWorkflow(ctx workflow.Context, in DesignPhaseInput) (DesignPhase
 // parsePlan extracts the first JSON object from raw and unmarshals it as a Plan.
 // Returns a zero Plan (empty Steps) when no valid JSON is found.
 func parsePlan(raw string) codexact.Plan {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end <= start {
-		return codexact.Plan{}
-	}
 	var p codexact.Plan
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &p); err != nil {
+	if err := codexact.ExtractJSON(raw, &p); err != nil {
 		return codexact.Plan{}
 	}
 	return p

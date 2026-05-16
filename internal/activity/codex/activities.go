@@ -106,17 +106,19 @@ func NewActivities(cx *codex.Client, mgr *workspace.Manager) *Activities {
 }
 
 // DesignActivity clones the repo and generates a refactoring plan.
+// SessionID must be set by the caller; the workflow layer is responsible for
+// deriving a stable ID so retried activity attempts reuse the same workspace.
 func (a *Activities) DesignActivity(ctx context.Context, in DesignInput) (DesignResult, error) {
 	activity.RecordHeartbeat(ctx, "design: cloning workspace")
 
-	sessionID := in.SessionID
-	if sessionID == "" {
-		sessionID = newSessionID()
+	if in.SessionID == "" {
+		return DesignResult{}, fmt.Errorf("session_id is required")
 	}
 	if in.BaseBranch == "" {
 		in.BaseBranch = "main"
 	}
 
+	sessionID := in.SessionID
 	s, _, err := a.mgr.GetOrCreate(ctx, sessionID, in.Repo, in.BaseBranch)
 	if err != nil {
 		return DesignResult{}, fmt.Errorf("workspace: %w", err)

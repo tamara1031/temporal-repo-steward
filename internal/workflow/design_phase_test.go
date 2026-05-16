@@ -63,6 +63,7 @@ func (s *designPhaseSuite) Test_HappyPath_ReviewOK() {
 		Return(codexact.ReviewResult{Verdict: "ok"}, nil)
 
 	env.ExecuteWorkflow(workflow.DesignPhaseWorkflow, workflow.DesignPhaseInput{
+		SessionID:  "test-session-00000001",
 		Repo:       "owner/repo",
 		BaseBranch: "main",
 		Brief:      "test brief",
